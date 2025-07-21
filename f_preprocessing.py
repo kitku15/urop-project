@@ -100,7 +100,7 @@ def crop_all_tiffs_in_repeat(directory, repeat, condition, markers, ymin, ymax, 
     for marker in markers:
         if mask:
             img = crop_tiff(f"{full_directory}/{marker}_{condition}_mask.tiff", ymin, ymax, xmin, xmax, rotate_angle)
-            img_dict[f"img_{marker}_mask"] = img
+            img_dict[f"mask_{marker}"] = img
         else:
             img = crop_tiff(f"{full_directory}/{condition}_{marker}.tiff", ymin, ymax, xmin, xmax, rotate_angle)
             img_dict[f"img_{marker}"] = img
@@ -120,7 +120,7 @@ def crop_all_tiffs_in_repeat(directory, repeat, condition, markers, ymin, ymax, 
             layers.append((f"img{repeat}_{marker}", img_dict[f'img_{marker}']))
         view_tiff(*layers)
 
-    return img_dict
+    
 
 
 def get_crop_coordinates(csv_path, repeat, condition):
@@ -178,4 +178,10 @@ def reload_cropped(repeat, condition):
 
     return images, masks
 
+def crop_all(directory, cropping_csv_path, conditions, repeat_no, markers):
 
+    for condition in conditions:
+        for i in repeat_no:
+            ymin, ymax, xmin, xmax, rotate_angle = get_crop_coordinates(cropping_csv_path, repeat=i, condition=condition)
+            crop_all_tiffs_in_repeat(directory=directory, repeat=i, condition=condition, markers=markers, ymin=ymin, ymax=ymax, xmin=xmin, xmax=xmax, rotate_angle=rotate_angle, visualize=False, mask=False)
+            crop_all_tiffs_in_repeat(directory=directory, repeat=i, condition=condition, markers=markers, ymin=ymin, ymax=ymax, xmin=xmin, xmax=xmax, rotate_angle=rotate_angle, visualize=False, mask=True)
