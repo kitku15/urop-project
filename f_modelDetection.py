@@ -254,9 +254,9 @@ def crop_and_save(args):
     xmin, xmax = xs.min(), xs.max() + 1
     cropped_small = tiff_small[ymin:ymax, xmin:xmax]
 
-    os.makedirs(f"boxes_tiffs/{heading}", exist_ok=True)
+    os.makedirs(f"{heading}", exist_ok=True)
 
-    plt.imsave(f"boxes_tiffs/{heading}/{box_id}.tiff", cropped_small, cmap='gray') 
+    plt.imsave(f"{heading}/{box_id}.tiff", cropped_small, cmap='gray') 
     print(f"added Box {box_id}")
     return cropped_small
 
