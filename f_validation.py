@@ -1,6 +1,5 @@
 from imports import *
 
-
 def view_tiff(*layers):
     '''
     Displays multiple image-related layers in Napari, such as images, masks, and points.
@@ -162,125 +161,240 @@ def check_list_size(all_coordinates, all_radii, img_boxes, mask_boxes):
     else:
         print("uh oh")
 
-
-def slider_visual(mask_boxes, img_boxes, all_coordinates, all_radii, print_info = False):
-
-    print("Creating slider...")
-
-    # transpose 
-    for i in range(len(mask_boxes)):
-        mask_boxes[i] = mask_boxes[i].T
-
-    for i in range(len(img_boxes)):
-        img_boxes[i] = img_boxes[i].T
-
-    # print first to check
-    if print_info:
-        print("\n Inspecting Coordinates:")
-        for i, item in enumerate(all_coordinates, start=1):
-            print(f"ID {i}: coord = {item}")
-
-        print("Image Boxes Shapes and IDs:")
-        for i, item in enumerate(img_boxes, start=1):
-            print(f"ID {i}: shape = {item.shape}")
-
-        print("\nMask Boxes Shapes and IDs:")
-        for i, item in enumerate(mask_boxes, start=1):
-            print(f"ID {i}: shape = {item.shape}")
+import numpy as np
+import napari
 
 
-    # Step 1: Get max shape
-    max_h = max(box.shape[0] for box in img_boxes)
-    max_w = max(box.shape[1] for box in img_boxes)
-    target_shape = (max_h, max_w)
+def pad_to_shape(arr, target_shape):
+    """Pad a 2D numpy array to a target shape (height, width)."""
+    pad_h = target_shape[0] - arr.shape[0]
+    pad_w = target_shape[1] - arr.shape[1]
+    pad_top = pad_h // 2
+    pad_bottom = pad_h - pad_top
+    pad_left = pad_w // 2
+    pad_right = pad_w - pad_left
 
-    if print_info:
-        print(f"Padding all boxes to shape: {target_shape}")
-
-    # Step 4: Pad boxes and adjust coordinates
-    img_boxes_padded = []
-    mask_boxes_padded = []
-    adjusted_coordinates = []
-    adjusted_radii = []
-
-    for i in range(len(img_boxes)):
-        padded_img, (shift_x, shift_y) = pad_to_shape(img_boxes[i], target_shape)
-        padded_mask, _ = pad_to_shape(mask_boxes[i], target_shape)
-
-        img_boxes_padded.append(padded_img)
-        mask_boxes_padded.append(padded_mask)
-
-        coords = all_coordinates[i]
-        rads = all_radii[i]
-
-        if len(coords) > 0:
-            adjusted_coords = coords + np.array([shift_x, shift_y])
-        else:
-            adjusted_coords = coords  # empty
-
-        adjusted_coordinates.append(adjusted_coords)
-        adjusted_radii.append(rads)
-
-        if print_info:
-            print(f"Box {i}: shift = ({shift_y}, {shift_x})")
-            print(f" - First coord before: {coords[0] if len(coords) else 'None'}")
-            print(f" - After adjust: {adjusted_coords[0] if len(coords) else 'None'}")
+    padded = np.pad(arr, ((pad_top, pad_bottom), (pad_left, pad_right)), mode='constant')
+    return padded, (pad_left, pad_top)  # x, y shift
 
 
+def slider_visual(
+    img_boxes_list,
+    mask_boxes_list,
+    all_coordinates_list,
+    outer_radius_list,
+    mid_radius_list,
+    inner_radius_list,
+    labels=None,
+    print_info=False
+):
+    """
+    Visualize multiple sets of image/mask boxes and their coordinate-based blobs using napari.
 
-    # Step 3: Now you can stack
-    img_stack = np.stack(img_boxes_padded)
-    mask_stack = np.stack(mask_boxes_padded)
+    Parameters:
+    - img_boxes_list: list of lists of np.ndarrays (each is a set of image boxes)
+    - mask_boxes_list: list of lists of np.ndarrays (each is a set of mask boxes)
+    - all_coordinates_list: list of lists of (N, 2) arrays with coordinates per image
+    - outer_radius_list, mid_radius_list, inner_radius_list: list of radius lists per set
+    - labels: Optional list of strings for naming each image/mask group
+    - print_info: Print debug info
+    """
 
-    # Initialize viewer with time axis as slider
     viewer = napari.Viewer()
 
-    # Add image and mask with time axis (0th axis = "frame")
-    viewer.add_image(img_stack, name='Image Boxes', colormap='gray')
+    if labels is None:
+        labels = [f"Set {i+1}" for i in range(len(img_boxes_list))]
 
-    mask_stack = mask_stack.astype(np.uint8)  # or np.int32 if needed
-    viewer.add_labels(mask_stack, name='Mask Boxes', opacity=0.7)
+    for set_idx, (img_boxes, mask_boxes, coordinates, outer_r, mid_r, inner_r, label) in enumerate(
+        zip(img_boxes_list, mask_boxes_list, all_coordinates_list, outer_radius_list, mid_radius_list, inner_radius_list, labels)
+    ):
+        if print_info:
+            print(f"\nProcessing {label}")
 
+        # Transpose all boxes
+        img_boxes = [box.T for box in img_boxes]
+        mask_boxes = [box.T for box in mask_boxes]
 
-    # Add points: per-frame blobs
-    # Napari wants (T, N, 2) shape for time-aware points
-    points = []
-    sizes = []
+        # Get max shape
+        max_h = max(box.shape[0] for box in img_boxes)
+        max_w = max(box.shape[1] for box in img_boxes)
+        target_shape = (max_h, max_w)
 
-    for t, (coords, radii) in enumerate(zip(adjusted_coordinates, adjusted_radii)):  # ← use adjusted
-        if len(coords) > 0:
-            time_coords = np.column_stack((np.full(len(coords), t), coords))
-            points.append(time_coords)
-            sizes.append(radii * 2)  # Diameter, for visual sizing
-        else:
-            continue  # No blobs in this frame
+        if print_info:
+            print(f"{label}: Padding to {target_shape}")
 
-    # Finalize arrays for Napari
-    if points:
-        all_points = np.concatenate(points, axis=0)  # shape: (total_blobs, 3)
-        all_sizes = np.concatenate(sizes, axis=0)    # shape: (total_blobs,)
-    else:
-        all_points = np.empty((0, 3))
-        all_sizes = np.empty((0,))
+        img_boxes_padded = []
+        mask_boxes_padded = []
+        adjusted_coords = []
+        adjusted_outer = []
+        adjusted_mid = []
+        adjusted_inner = []
 
-    viewer.add_points(all_points, size=all_sizes, name='Blobs', face_color='blue', opacity=0.5)
+        for i in range(len(img_boxes)):
+            padded_img, (shift_x, shift_y) = pad_to_shape(img_boxes[i], target_shape)
+            padded_mask, _ = pad_to_shape(mask_boxes[i], target_shape)
 
+            img_boxes_padded.append(padded_img)
+            mask_boxes_padded.append(padded_mask)
+
+            coords = coordinates[i]
+            if len(coords) > 0:
+                adj_coords = coords + np.array([shift_x, shift_y])
+            else:
+                adj_coords = coords  # empty
+
+            adjusted_coords.append(adj_coords)
+            adjusted_outer.append(outer_r[i])
+            adjusted_mid.append(mid_r[i])
+            adjusted_inner.append(inner_r[i])
+
+            if print_info:
+                print(f"  Box {i}: shift=({shift_y}, {shift_x}) coords adjusted")
+
+        img_stack = np.stack(img_boxes_padded)
+        mask_stack = np.stack(mask_boxes_padded).astype(np.uint8)
+
+        viewer.add_image(img_stack, name=f'{label} - Images', colormap='gray')
+        viewer.add_labels(mask_stack, name=f'{label} - Masks', opacity=0.4)
+
+        def add_blobs(coords_list, radii_list, color, name):
+            points = []
+            sizes = []
+
+            for t, (coords, radii) in enumerate(zip(coords_list, radii_list)):
+                if len(coords) > 0:
+                    time_coords = np.column_stack((np.full(len(coords), t), coords))
+                    points.append(time_coords)
+                    sizes.append(radii * 2)  # Use diameter
+            if points:
+                all_points = np.concatenate(points, axis=0)
+                all_sizes = np.concatenate(sizes, axis=0)
+            else:
+                all_points = np.empty((0, 3))
+                all_sizes = np.empty((0,))
+
+            viewer.add_points(
+                all_points,
+                size=all_sizes,
+                name=f'{label} - {name}',
+                face_color=color,
+                border_width=0.0,
+                opacity=0.2
+            )
+
+        add_blobs(adjusted_coords, adjusted_outer, 'purple', 'Outer Blobs')
+        add_blobs(adjusted_coords, adjusted_mid, 'yellow', 'Mid Blobs')
+        add_blobs(adjusted_coords, adjusted_inner, 'cyan', 'Inner Blobs')
 
     napari.run()
 
 
-def plot_intensities(intensities, output):
+def safe_subtract(intensities, reference):
+    """
+    Replace None with 0, convert to arrays, then subtract element‐wise.
+    
+    Parameters:
+        intensities (list of floats or None)
+        reference   (list of floats or single float or None)
+    
+    Returns:
+        np.ndarray: result of intensities - reference, with None→0.
+    """
+    # If reference is a single value, broadcast it to the length of intensities
+    if not isinstance(reference, (list, tuple, np.ndarray)):
+        reference = [reference] * len(intensities)
 
-    # Filter out None values
-    valid_intensities = [val for val in intensities if val is not None]
+    # Replace None with 0
+    clean_i = [0.0 if v is None else v for v in intensities]
+    clean_r = [0.0 if v is None else v for v in reference]
 
-    # Plot histogram
-    plt.figure(figsize=(10, 6))
-    plt.hist(valid_intensities, bins=30, color='skyblue', edgecolor='black')
-    plt.title("Distribution of Blob Intensities")
-    plt.xlabel("Intensity")
-    plt.ylabel("Frequency")
-    plt.grid(True)
+    arr_i = np.array(clean_i, dtype=float)
+    arr_r = np.array(clean_r, dtype=float)
+
+    # Perform element-wise subtraction
+    return arr_i - arr_r
+
+def safe_normalize(intensities, reference):
+    """
+    Replace None with 0, convert to arrays, then divide element‐wise.
+    
+    Parameters:
+        intensities (list of floats or None)
+        reference   (list of floats or single float or None)
+    
+    Returns:
+        np.ndarray: result of intensities / reference, with None→0.
+    """
+    # If reference is a single value, broadcast it to the length of intensities
+    if not isinstance(reference, (list, tuple, np.ndarray)):
+        reference = [reference] * len(intensities)
+
+    # Replace None with 0
+    clean_i = [0.0 if v is None else v for v in intensities]
+    clean_r = [0.0 if v is None else v for v in reference]
+
+    arr_i = np.array(clean_i, dtype=float)
+    arr_r = np.array(clean_r, dtype=float)
+
+    # Perform element-wise division (wherever reference is zero, result will be inf or nan)
+    return arr_i / arr_r
+
+
+
+def plot_all_markers(marker_intensities, output, norm_by_area=False):
+    """
+    Plot a grouped bar chart showing inner/mid/outer intensities for each marker.
+    """
+    labels = ['inner', 'mid', 'outer']
+    colors = ['#00bcd4', '#ffeb3b', '#9c27b0']
+    area_dict = {
+        'inner': 27500.911392939724,
+        'mid': 28541.195418817155,
+        'outer': 67820.81241632822
+    }
+
+    markers = list(marker_intensities.keys())
+    n_markers = len(markers)
+    n_levels = 3  # inner, mid, outer
+
+    # Organize data for plotting
+    means = []
+    stds = []
+    for marker in markers:
+        bins = marker_intensities[marker]
+
+        if norm_by_area:
+            bins = [
+                bins[0] / area_dict['inner'],
+                bins[1] / area_dict['mid'],
+                bins[2] / area_dict['outer'],
+            ]
+
+        means.append([np.nanmean(b) for b in bins])
+        stds.append([np.nanstd(b) for b in bins])
+
+    means = np.array(means)  # shape: (n_markers, 3)
+    stds = np.array(stds)
+
+    x = np.arange(n_markers)
+    width = 0.25
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for i in range(n_levels):
+        ax.bar(x + i * width, means[:, i], width, yerr=stds[:, i], capsize=5,
+               label=labels[i], alpha=0.7, color=colors[i], edgecolor='black')
+
+    ax.set_xticks(x + width)
+    ax.set_xticklabels(markers)
+    ax.set_ylabel("Average Normalized Intensity")
+    ax.set_title("Intensity Levels per Marker")
+    ax.legend()
+    ax.grid(axis='y')
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output), exist_ok=True)
     plt.savefig(output)
     plt.close()
+
+    print("Combined plot saved to:", output)
+
+

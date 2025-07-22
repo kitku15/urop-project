@@ -471,5 +471,5 @@ def detect_blob_all(markers, conditions, repeat_no):
 
     with open("blob_output_paths.txt", "a") as f:
         for path in blob_output_paths:
-            f.write(path)
+            f.write(path + "\n")
     print("Finshed putting all blob output paths to blob_output_paths.txt")
