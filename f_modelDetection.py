@@ -98,7 +98,117 @@ def load_blobs(filename):
     return blob, coordinates, radii
 
 
-def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=50, exclude_border=10):
+def full_intensity_stats_around_blob(image, coordinates_rescaled, radii_rescaled):
+    '''
+    Calculate average and total intensity outside the blob area over the full image,
+    with intensities min-max normalized to [0, 1].
+
+    Parameters:
+        image (numpy.ndarray): Original image.
+        coordinates_rescaled (numpy.ndarray): Array of shape (1, 2) with (x, y) coordinates of the blob center.
+        radii_rescaled (numpy.ndarray): Array containing radius of the blob.
+
+    Returns:
+        tuple: (average_normalized_intensity, total_normalized_intensity, normalized_intensities_outside_blob)
+    '''
+
+    height, width = image.shape[:2]
+    x_center, y_center = coordinates_rescaled[0]
+    radius = radii_rescaled[0]
+
+    Y, X = np.ogrid[:height, :width]
+    dist_sq = (X - x_center)**2 + (Y - y_center)**2
+    mask = dist_sq > radius**2  # True outside blob
+
+    intensities_outside_blob = image[mask]
+
+    if intensities_outside_blob.size > 0:
+        # Min-max normalize intensities
+        min_val = intensities_outside_blob.min()
+        max_val = intensities_outside_blob.max()
+
+        if max_val > min_val:
+            normalized = (intensities_outside_blob - min_val) / (max_val - min_val)
+        else:
+            normalized = np.zeros_like(intensities_outside_blob)
+
+        avg_intensity = normalized.mean()
+        total_intensity = normalized.sum()
+
+        # before normalization
+        avg_intensity_raw = intensities_outside_blob.mean()
+
+    else:
+        avg_intensity = np.nan
+        total_intensity = np.nan
+        normalized = np.array([])
+
+    return avg_intensity, total_intensity, normalized, avg_intensity_raw
+
+
+def intensity_stats_around_blob(image, coordinates_rescaled, radii_rescaled):
+    '''
+    Calculate average and total intensity within a square box around the blob,
+    excluding the circular blob itself, and normalize intensities to [0, 1].
+
+    The returned average and total intensity are based on normalized values.
+
+    Parameters:
+        image (numpy.ndarray): Original image.
+        coordinates_rescaled (numpy.ndarray): Array of shape (1, 2) with (x, y) coordinates of the blob center.
+        radii_rescaled (numpy.ndarray): Array containing radius of the blob.
+
+    Returns:
+        tuple: (average_normalized_intensity, total_normalized_intensity, normalized_intensities_outside_blob)
+    '''
+
+    height, width = image.shape[:2]
+    x_center, y_center = coordinates_rescaled[0]
+    radius = radii_rescaled[0]
+
+    # Define bounding box
+    x_min = max(int(x_center - radius), 0)
+    x_max = min(int(x_center + radius), width)
+    y_min = max(int(y_center - radius), 0)
+    y_max = min(int(y_center + radius), height)
+
+    # Extract region from image
+    region = image[y_min:y_max, x_min:x_max]
+
+    # Create circular mask to exclude blob
+    Y, X = np.ogrid[y_min:y_max, x_min:x_max]
+    dist_sq = (X - x_center)**2 + (Y - y_center)**2
+    blob_mask = dist_sq > radius**2
+
+    # Apply mask to region
+    intensities_outside_blob = region[blob_mask]
+    avg_outside_raw = intensities_outside_blob.mean()
+
+    if intensities_outside_blob.size > 0:
+        # Normalize to [0, 1]
+        min_val = intensities_outside_blob.min()
+        max_val = intensities_outside_blob.max()
+        if max_val > min_val:
+            normalized = (intensities_outside_blob - min_val) / (max_val - min_val)
+        else:
+            normalized = np.zeros_like(intensities_outside_blob)
+
+        avg_intensity = normalized.mean()
+        total_intensity = normalized.sum()
+        median_intensity = np.median(normalized)
+        raw_min = min_val
+        raw_max = max_val
+        raw_median = np.median(intensities_outside_blob)
+
+    else:
+        avg_intensity = np.nan
+        total_intensity = np.nan
+        normalized = np.array([])
+
+    return avg_intensity, total_intensity, normalized, avg_outside_raw, median_intensity, raw_min, raw_max, raw_median
+
+
+def detect_blobs(tiff, threshold, image_box, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=50, exclude_border=45):
     '''
     Detects blobs in a TIFF image using the Laplacian of Gaussian (LoG) method after downscaling.
 
@@ -122,14 +232,10 @@ def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=5
         - If no blobs are detected, returns empty arrays.
     '''
 
-    downsampled = rescale(tiff, downscale_factor, anti_aliasing=True)  # 4x smaller
-
-    # #invert
-    # tiff = invert(tiff)
+    downsampled = rescale(tiff, downscale_factor, anti_aliasing=True) 
     
     # Convert to float and normalize
     tiff = img_as_float(downsampled)
-
 
     # smooth
     smoothed = gaussian(tiff, sigma)
@@ -137,8 +243,9 @@ def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=5
     # Detect blobs
     blobs = blob_log(image=smoothed, min_sigma=min_sigma, max_sigma=max_sigma, exclude_border=exclude_border)
 
+    # if no blob detected rturn empty arrays
     if blobs.shape[0] == 0:
-        return np.empty((0, 3)), np.empty((0, 2)), np.array([])
+        return np.empty((0, 3)), np.empty((0, 2)), np.array([]), np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
     
     # Select the blob with the largest radius (sigma)
     largest_blob_idx = np.argmax(blobs[:, 2])
@@ -153,7 +260,25 @@ def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=5
     coordinates_rescaled = coordinates * scale
     radii_rescaled = radii * scale
 
-    return blob, coordinates_rescaled, radii_rescaled
+    # finding false positives
+    avg_outside, total_outside, intensities_outside_blob, avg_outside_raw, median_intensity, raw_min, raw_max, raw_median = intensity_stats_around_blob(image_box, coordinates_rescaled, radii_rescaled)
+    f_avg_outside, f_total_outside, f_intensities_outside_blob, avg_intensity_raw = full_intensity_stats_around_blob(image_box, coordinates_rescaled, radii_rescaled)
+
+    # filter out those with outside intensity 
+    # if avg_outside > threshold:
+    #     return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
+    # elif f_avg_outside > 0.2:
+    #     return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
+    # elif avg_intensity_raw > 4000:
+    #     return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
+
+    if avg_outside_raw > 4320 and avg_outside_raw < 4400:
+        return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
+    elif avg_outside_raw > 5300:
+        return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
+
+
+    return blob, coordinates_rescaled, radii_rescaled, avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
 
 
 def analyse_by_grid(tiff, grid_mask, marker, condition, repeat, downscale_factor=0.25, mask=True, rescale_switch=True):
@@ -323,23 +448,38 @@ def process_box(args):
         - Uses the `detect_blobs()` function for blob detection.
         - Ensures returned arrays have consistent shape using `np.atleast_2d` and `np.ravel`.
     '''
-    box_id, box = args
-    blob, coordinates, radii = detect_blobs(box)
+    box_id, box, threshold, _, image = args
+
+    blob, coordinates, radii, outside_intensity, total_outside_intensity, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity = detect_blobs(box, threshold, image)
 
     # removed saving blobs seperately as I just wanto save all radii and coordinates at the end     
 
     if len(blob) == 1:
         print(f"Saved blob for box {box_id}")
+        print(f"{box_id} normalized small box intensity:", outside_intensity)
+        print(f"{box_id} normalized full box intensity", f_avg_outside)
+        print(f"{box_id} normalized small box median intensity", median_intensity)
+        print(f"{box_id} Raw full box intensity:", avg_intensity_raw)
+        print(f"{box_id} Raw small box intensity:", avg_outside_raw)
+
+        model_found = True
     elif len(blob) == 0:
         print(f"X No blobs detected in box {box_id}")
+        print(f"{box_id} normalized small box intensity:", outside_intensity)
+        print(f"{box_id} normalized full box intensity", f_avg_outside)
+        print(f"{box_id} Raw full box intensity:", avg_intensity_raw)
+        print(f"{box_id} Raw small box intensity:", avg_outside_raw)
+        print(f"{box_id} normalized small box median intensity", median_intensity)
+
+        model_found = False
     else:
         print(f"X Unexpected blob count in box {box_id} (count: {len(blob)})")
 
     coordinates = np.atleast_2d(coordinates)
     radii = np.ravel(radii)
-    return coordinates, radii
+    return coordinates, radii, outside_intensity, total_outside_intensity, model_found, intensities_outside_blob, f_avg_outside, avg_intensity_raw
 
-def detect_blob_in_all_boxes(mask_boxes):
+def detect_blob_in_all_boxes(mask_boxes, threshold, img_boxes):
     '''
     Detects blobs in a list of image or mask boxes in parallel and collects their coordinates and radii.
 
@@ -359,17 +499,30 @@ def detect_blob_in_all_boxes(mask_boxes):
     '''
     all_coordinates = []
     all_radii = []
+    all_outside_intensities = []
+    all_total_outside_intensity = []
+    model_count = 0
+    all_intensities_outside_blob = []
+    all_f_avg_outside = []
+    all_avg_intensity_raw = []
 
-    box_args = [(i + 1, box) for i, box in enumerate(mask_boxes)]  # (box_id, box)
+    box_args = [(i + 1, box, threshold, i + 1, image) for i, (box, image) in enumerate(zip(mask_boxes, img_boxes))]
 
     with ThreadPoolExecutor() as executor:
         results = executor.map(process_box, box_args)  # preserves order
 
-    for coords, rads in results:
+    for coords, rads, outside_intensity, total_outside_intensity, model_found, intensities_outside_blob, f_avg_outside, avg_intensity_raw in results:
         all_coordinates.append(coords)
         all_radii.append(rads)
+        all_outside_intensities.append(outside_intensity)
+        all_total_outside_intensity.append(total_outside_intensity)
+        all_intensities_outside_blob.append(intensities_outside_blob)
+        all_f_avg_outside.append(f_avg_outside)
+        all_avg_intensity_raw.append(avg_intensity_raw)
+        if model_found:
+            model_count = model_count + 1
 
-    return all_coordinates, all_radii
+    return all_coordinates, all_radii, all_outside_intensities, all_total_outside_intensity, model_count, all_intensities_outside_blob, all_f_avg_outside, all_avg_intensity_raw
 
 def set_radius(all_radii, radius):
     all_radii = [np.array([radius]) if r.size > 0 else r for r in all_radii]
@@ -420,7 +573,7 @@ def make_grid_and_split_all(markers, conditions, repeat_no, output_list=False):
         return mask_boxes_list, img_boxes_list
 
 
-def detect_blob_all(markers, conditions, repeat_no):
+def detect_blob_all(markers, conditions, repeat_no, threshold):
     blob_output_paths = []
 
     for repeat in repeat_no:
@@ -430,9 +583,17 @@ def detect_blob_all(markers, conditions, repeat_no):
                 # getting directories
                 mask_boxes_path = f"boxes_npz/{repeat}/mask_{marker}_{condition}_NOrescale_boxes.npz"
                 image_boxes_path = f"boxes_npz/{repeat}/img_{marker}_{condition}_NOrescale_boxes.npz"
+                outside_intensities_path = f"outside_intensities_{repeat}.npy"
 
-                blobs_output_directory = f"blobs_npz/{repeat}"
+                blobs_output_directory = f"blobs_npz_{threshold}_fixedborder/{repeat}"
                 blobs_output_path = f"{blobs_output_directory}/{marker}_{condition}.npz"
+
+                all_outside_intensities_path = f"all_outside_intensities.npy" # arrays (not averaged full lists) not used anymore
+                total_outside_intensities_path = f"outside_total_intensities.npy" # total not average, not used anymore (normalized)
+                outside_intensities_path = f"outside_intensities.npy" # small box average (normalized)
+                all_f_avg_outside_path = f"all_f_avg_outside.npy" # full image average (normalized)
+                all_avg_intensity_raw_path = f"all_avg_intensity_raw_path.npy" #full image average (not normalized)
+
                 os.makedirs(blobs_output_directory, exist_ok=True)
                 
                 # A. RELOAD: IMAGE, MASK BOXES 
@@ -447,7 +608,8 @@ def detect_blob_all(markers, conditions, repeat_no):
     
                 # B. DETECT BLOB IN EACH MASK BOX AND SAVE
                 print(f"------------------------Starting Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
-                all_coordinates, all_radii = detect_blob_in_all_boxes(mask_boxes)
+                all_coordinates, all_radii, all_outside_intensities, all_total_outside_intensity, model_count, all_intensities_outside_blob, all_f_avg_outside, all_avg_intensity_raw = detect_blob_in_all_boxes(mask_boxes, threshold, img_boxes)
+                print(f"Models detected: {model_count}/676")
                 print(f"------------------------Finished Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
 
 
@@ -469,7 +631,16 @@ def detect_blob_all(markers, conditions, repeat_no):
 
                 blob_output_paths.append(blobs_output_path)
 
-    with open("blob_output_paths.txt", "a") as f:
+                np.save(outside_intensities_path, all_outside_intensities)
+                np.save(total_outside_intensities_path, all_total_outside_intensity)
+                np.save(all_f_avg_outside_path, all_f_avg_outside)
+                np.save(all_avg_intensity_raw_path, all_avg_intensity_raw)
+
+                # Convert to object array then save
+                obj_array = np.array(all_intensities_outside_blob, dtype=object)
+                np.save(all_outside_intensities_path, obj_array)
+
+    with open(f"blob_output_paths_{threshold}.txt", "a") as f:
         for path in blob_output_paths:
             f.write(path + "\n")
-    print("Finshed putting all blob output paths to blob_output_paths.txt")
+    print(f"Finshed putting all blob output paths to blob_output_paths_{threshold}.txt")

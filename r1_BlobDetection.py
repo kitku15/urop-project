@@ -20,7 +20,7 @@ blob_output_paths = "blob_output_paths.txt"
 bPREPROCESSING_1 = False
 bPREPROCESSING_2 = False
 bBLOB_DECETION_1 = False
-bBLOB_DECETION_2 = False
+bBLOB_DECETION_2 = True
 
 # PREPROCESSING 1: SPLIT CZI INTO TIFFS
 if bPREPROCESSING_1:
@@ -37,7 +37,16 @@ if bBLOB_DECETION_1:
 
 # BLOB DETECTION 2: BLOB DETECTION IN DAPI MASK BOX AND SAVE
 if bBLOB_DECETION_2:
-    detect_blob_all(markers=["DAPI"], conditions=["WT"], repeat_no=[1])
+    # lst = (np.arange(3000, 6000, 1000)).tolist()
+    # for threshold in lst:
+    #     print("starting threshold:", threshold)
+    #     detect_blob_all(markers=["DAPI"], conditions=["WT"], repeat_no=[1], threshold=threshold)
+    
+    # threshold below is for small normalized box 
+    # blw 3967 is blob
+    # btwn 3967 and 4451
+    # abov 4451 is blob
+    detect_blob_all(markers=["DAPI"], conditions=["WT"], repeat_no=[1], threshold=5300)
 
 
 # END TIMER

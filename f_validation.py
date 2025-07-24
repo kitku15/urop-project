@@ -289,30 +289,6 @@ def slider_visual(
     napari.run()
 
 
-def safe_subtract(intensities, reference):
-    """
-    Replace None with 0, convert to arrays, then subtract element‐wise.
-    
-    Parameters:
-        intensities (list of floats or None)
-        reference   (list of floats or single float or None)
-    
-    Returns:
-        np.ndarray: result of intensities - reference, with None→0.
-    """
-    # If reference is a single value, broadcast it to the length of intensities
-    if not isinstance(reference, (list, tuple, np.ndarray)):
-        reference = [reference] * len(intensities)
-
-    # Replace None with 0
-    clean_i = [0.0 if v is None else v for v in intensities]
-    clean_r = [0.0 if v is None else v for v in reference]
-
-    arr_i = np.array(clean_i, dtype=float)
-    arr_r = np.array(clean_r, dtype=float)
-
-    # Perform element-wise subtraction
-    return arr_i - arr_r
 
 def safe_normalize(intensities, reference):
     """
