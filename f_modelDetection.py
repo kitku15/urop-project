@@ -98,7 +98,7 @@ def load_blobs(filename):
     return blob, coordinates, radii
 
 
-def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=50, exclude_border=10):
+def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=50, exclude_border=45):
     '''
     Detects blobs in a TIFF image using the Laplacian of Gaussian (LoG) method after downscaling.
 
@@ -330,14 +330,16 @@ def process_box(args):
 
     if len(blob) == 1:
         print(f"Saved blob for box {box_id}")
+        model_found = True
     elif len(blob) == 0:
         print(f"X No blobs detected in box {box_id}")
+        model_found = False
     else:
         print(f"X Unexpected blob count in box {box_id} (count: {len(blob)})")
 
     coordinates = np.atleast_2d(coordinates)
     radii = np.ravel(radii)
-    return coordinates, radii
+    return coordinates, radii, model_found
 
 def detect_blob_in_all_boxes(mask_boxes):
     '''
@@ -359,17 +361,20 @@ def detect_blob_in_all_boxes(mask_boxes):
     '''
     all_coordinates = []
     all_radii = []
+    model_count = 0
 
     box_args = [(i + 1, box) for i, box in enumerate(mask_boxes)]  # (box_id, box)
 
     with ThreadPoolExecutor() as executor:
         results = executor.map(process_box, box_args)  # preserves order
 
-    for coords, rads in results:
+    for coords, rads, model_found in results:
         all_coordinates.append(coords)
         all_radii.append(rads)
+        if model_found:
+            model_count = model_count + 1
 
-    return all_coordinates, all_radii
+        return all_coordinates, all_radii, model_count
 
 def set_radius(all_radii, radius):
     all_radii = [np.array([radius]) if r.size > 0 else r for r in all_radii]
@@ -447,7 +452,8 @@ def detect_blob_all(markers, conditions, repeat_no):
     
                 # B. DETECT BLOB IN EACH MASK BOX AND SAVE
                 print(f"------------------------Starting Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
-                all_coordinates, all_radii = detect_blob_in_all_boxes(mask_boxes)
+                all_coordinates, all_radii, model_count = detect_blob_in_all_boxes(mask_boxes)
+                print(f"Models detected: {model_count}/676")
                 print(f"------------------------Finished Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
 
 
