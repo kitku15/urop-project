@@ -9,7 +9,7 @@ from pathlib import Path
 # blob_output_paths_filtered05.txt
 # blob_output_paths.txt
 
-def read_paths(filename="blob_output_paths_5300.txt"):
+def read_paths(filename="blob_output_paths_rel05.txt"):
     with open(filename, "r") as f:
         for line in f:
             path = line.strip()  # Remove trailing newline and any extra spaces
@@ -136,7 +136,7 @@ def adjust(marker, DAPI_coordinates, outer_radius_array, mid_radius_array, inner
 if __name__ == "__main__":
     DAPI_coordinates, DAPI_mask_boxes, DAPI_img_boxes, outer_radius_array, mid_radius_array, inner_radius_array = load_DAPI()
 
-    adjust("BRA", DAPI_coordinates, outer_radius_array, mid_radius_array, inner_radius_array)
+    adjust("DAPI", DAPI_coordinates, outer_radius_array, mid_radius_array, inner_radius_array)
     # adjust("GATA3", DAPI_coordinates, outer_radius_array, mid_radius_array, inner_radius_array)
 
     # adjust("SOX2", DAPI_coordinates, outer_radius_array, mid_radius_array, inner_radius_array)

@@ -241,7 +241,7 @@ def detect_blobs(tiff, threshold, image_box, downscale_factor=0.25, sigma=2, min
     smoothed = gaussian(tiff, sigma)
 
     # Detect blobs
-    blobs = blob_log(image=smoothed, min_sigma=min_sigma, max_sigma=max_sigma, exclude_border=exclude_border)
+    blobs = blob_log(image=smoothed, min_sigma=min_sigma, max_sigma=max_sigma, exclude_border=exclude_border, threshold_rel=0.5)
 
     # if no blob detected rturn empty arrays
     if blobs.shape[0] == 0:
@@ -272,10 +272,10 @@ def detect_blobs(tiff, threshold, image_box, downscale_factor=0.25, sigma=2, min
     # elif avg_intensity_raw > 4000:
     #     return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
 
-    if avg_outside_raw > 4320 and avg_outside_raw < 4400:
-        return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
-    elif avg_outside_raw > 5300:
-        return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
+    # if avg_outside_raw > 4320 and avg_outside_raw < 4400:
+    #     return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
+    # elif avg_outside_raw > 5300:
+    #     return np.empty((0, 3)), np.empty((0, 2)), np.array([]), avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity
 
 
     return blob, coordinates_rescaled, radii_rescaled, avg_outside, total_outside, intensities_outside_blob, f_avg_outside, avg_intensity_raw, avg_outside_raw, median_intensity

@@ -46,7 +46,7 @@ if bBLOB_DECETION_2:
     # blw 3967 is blob
     # btwn 3967 and 4451
     # abov 4451 is blob
-    detect_blob_all(markers=["DAPI"], conditions=["WT"], repeat_no=[1], threshold=5300)
+    detect_blob_all(markers=["DAPI"], conditions=["WT"], repeat_no=[1], threshold='rel05')
 
 
 # END TIMER
