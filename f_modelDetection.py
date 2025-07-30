@@ -97,8 +97,228 @@ def load_blobs(filename):
     
     return blob, coordinates, radii
 
+def small_box(image, coordinates_rescaled, radii_rescaled):
+    '''
+    get small box around identified blob 
+    '''
+    # get image info
+    height, width = image.shape[:2]
+    x_center, y_center = coordinates_rescaled[0]
+    radius = radii_rescaled[0]
 
-def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=50, exclude_border=45):
+    # Define bounding box with a bit of space
+    space = -10
+    x_min = max(int(x_center - radius), 0) - space
+    x_max = min(int(x_center + radius), width) + space
+    y_min = max(int(y_center - radius), 0) - space
+    y_max = min(int(y_center + radius), height) + space
+
+    # Extract region from image
+    small_image = image[y_min:y_max, x_min:x_max]
+
+    return small_image
+    
+def regions_props_preprocessing(area, sigma, blurred_thresh):
+    '''
+    preprocessing for regions props 
+    
+    '''
+
+    # If RGBA, drop alpha and convert to grayscale
+    if area.ndim == 3 and area.shape[2] == 4:
+            area = area[:, :, :3]  # Drop alpha
+            area = color.rgb2gray(area)
+
+    # normalize before applying Gaussian
+    normalized = (area - area.min()) / (area.max() - area.min())
+
+    # Apply Gaussian blur
+    blurred = gaussian(normalized, sigma=sigma)
+
+    # dupa visualize blurred--------------------------
+    # # Flatten the blurred image to 1D for distribution
+    # blurred_flat = blurred.ravel()
+
+    # # Plot histogram and KDE (kernel density estimate)
+    # plt.figure(figsize=(8, 5))
+    # sns.histplot(blurred_flat, bins=50, kde=True, color='blue')
+    # plt.title("Distribution of Blurred Pixel Values")
+    # plt.xlabel("Pixel Intensity")
+    # plt.ylabel("Frequency")
+    # plt.grid(True)
+    # plt.savefig("Blurred.png")
+    #-----------------------------------
+
+    # Convert to binary mask
+    binary_mask = blurred > blurred_thresh # can adjust
+
+    labeled = measure.label(binary_mask) # Label connected components
+    regions = measure.regionprops(labeled) # Measure properties
+
+    return regions, binary_mask
+
+def circularity_filter(area, c_thresh, box_id, filter_no):
+    '''
+    Apply circularity filter on small image: if blob not circular enough --> filter out!
+    '''
+    regions, binary_mask = area
+    circularity_pass = False
+    circular_blobs = []
+    c_thresh = 0
+
+    # Filter by circularity
+    for region in regions:
+
+        if region.perimeter == 0: # to prevent division by zero 
+            continue
+
+        circularity = 4 * np.pi * region.area / (region.perimeter ** 2)
+
+        # SIZE FILTERS 
+        min_diameter = 50
+        diameter = region.equivalent_diameter
+
+        if circularity > c_thresh and min_diameter <= diameter:
+            circular_blobs.append((region, circularity))
+
+    # visualize dupa --------------------------
+    # fig, ax = plt.subplots()
+    # ax.imshow(binary_mask, cmap='gray')
+    # ax.set_title(f'{len(circular_blobs)} Circular Blobs Detected')
+
+    # if not circular_blobs:
+    #     ax.set_title('No Circular Blobs Detected')
+    # else:
+    #     ax.set_title(f'{len(circular_blobs)} Circular Blob(s) Detected')
+    #     for region in circular_blobs:
+    #         y, x = region.centroid
+    #         diameter = region.equivalent_diameter
+    #         r = diameter / 2.0
+    #         # Draw the circle
+    #         circle = plt.Circle((x, y), r, edgecolor='red', fill=False, linewidth=1.5)
+    #         ax.add_patch(circle)
+    #         # Label the diameter on the image
+    #         ax.text(x, y, f'{circularity:.3f}', color='blue', fontsize=8, ha='center', va='center')
+    # plt.axis('off')
+    # plt.savefig(f'Circularity_Filter_output_{box_id}_filter{filter_no}')
+    # plt.close()
+    # -----------------------------------------
+
+    if circular_blobs:
+        # Find the blob with the largest area
+        largest_blob, best_circularity = max(circular_blobs, key=lambda x: x[0].area)
+        return True, best_circularity
+    else:
+        return False, 0
+    
+def border_filter(area):
+    '''
+    Apply border filtering: if white area touches border --> filter out!
+    '''
+    regions, binary_mask = area
+    area_height, area_width = binary_mask.shape   # get height and width
+    border_blob_regions = []
+    for region in regions:
+        # Get bounding box: (min_row, min_col, max_row, max_col)
+        minr, minc, maxr, maxc = region.bbox
+        # Check if it touches image border
+        if minr <= 0 or minc <= 0 or maxr >= area_height or maxc >= area_width:
+            border_blob_regions.append(region)
+            
+    if border_blob_regions:  
+        border_pass = False
+        return border_pass              
+    else:
+        border_pass = True
+        return border_pass
+
+def filter_1(box_id, img_box, F1_LVThresh, coordinates_rescaled, radii_rescaled):
+    '''
+    Blurry-ness filter using Laplacian Variance
+    
+    '''      
+    small_img = small_box(img_box, coordinates_rescaled, radii_rescaled)
+
+    def is_blurry(image):
+        # Only convert to grayscale if image has more than one channel
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray_image = image.copy()
+
+        laplacian_var = cv2.Laplacian(gray_image, cv2.CV_64F).var()
+        return laplacian_var
+    
+    # laplacian_var = is_blurry(img_box) # on whole image
+    laplacian_var = is_blurry(small_img) # on small image 
+
+    thresh = F1_LVThresh
+
+    if laplacian_var > thresh:
+        filter_1_pass = True
+        # print({box_id}, "Is a clear Image. Passed filter 1. Small Lap Value:", laplacian_var)
+
+    else:
+        filter_1_pass = False
+        # print({box_id}, "Is a blurry Image. Failed filter 1, throwing it out.. Small Lap Value:", laplacian_var)
+        
+    return filter_1_pass, laplacian_var
+
+def filter_2(box_id, img_box, sigma, c_thresh, blurred, coordinates_rescaled, radii_rescaled):
+    '''
+    Circularity and Border Filter 
+
+    '''
+
+    # Apply contrast 
+    img_box = img_as_float(img_box)
+    # img_con = exposure.adjust_sigmoid(img_box, gain=20, cutoff=0.2)
+
+
+    # Handle grayscale images
+    is_gray = img_box.ndim == 2
+    
+    # trying to visualize contrast effect dupa -------------------------
+    # fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    # axes[0].imshow(img_box, cmap='gray' if is_gray else None)
+    # axes[0].set_title("Original")
+    # axes[0].axis('off')
+    # axes[1].imshow(img_con, cmap='gray' if is_gray else None)
+    # axes[1].set_title("Contrast Adjusted")
+    # axes[1].axis('off')
+    # plt.tight_layout()
+    # plt.savefig(f'Contrast_effect_output_{box_id}.png')
+    # plt.close()
+    # -----------------------------------------------------------------
+
+    # images: divide image into whole and small area and preprocess
+    whole = regions_props_preprocessing(img_box, sigma, blurred)
+    # small = regions_props_preprocessing(small_box(img_con, coordinates_rescaled, radii_rescaled), sigma)
+
+    # Apply filters
+    filter_no = 2
+    circularity_pass, circularity = circularity_filter(whole, c_thresh, box_id, filter_no)
+    # print({box_id}, f'Circularity is: {circularity:.3f}')
+    
+    border_pass  = border_filter(whole)
+
+    # print details of filtering
+    # if not circularity_pass:
+        # print({box_id}, "Failed Filter 2 Circularity.. throwing it out")
+    # if not border_pass:
+        # print({box_id}, "Failed Filter 2 Border.. throwing it out")
+
+    if circularity_pass and border_pass:
+        filter_2_pass = True
+        # print({box_id}, "Passed Filter 2, Included in analysis!")
+    else:
+        filter_2_pass = False
+
+    return filter_2_pass, circularity
+
+
+
+def detect_blobs(box_id, tiff, img, F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=50, exclude_border=45):
     '''
     Detects blobs in a TIFF image using the Laplacian of Gaussian (LoG) method after downscaling.
 
@@ -122,23 +342,39 @@ def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=5
         - If no blobs are detected, returns empty arrays.
     '''
 
-    downsampled = rescale(tiff, downscale_factor, anti_aliasing=True)  # 4x smaller
+    # open csv 
+    df = pd.read_csv("backup/meta.csv")
 
-    # #invert
-    # tiff = invert(tiff)
+    # Find the row by box_id
+    row = df.loc[df['box_id'] == box_id]
+
+    # Get the status
+    status = row['status'].values[0] # status is either 'v' or 'x'
+
+
+    # downscale
+    downsampled = rescale(tiff, downscale_factor, anti_aliasing=True) 
     
     # Convert to float and normalize
-    tiff = img_as_float(downsampled)
-
+    tiff_float = img_as_float(downsampled)
 
     # smooth
-    smoothed = gaussian(tiff, sigma)
+    smoothed = gaussian(tiff_float, sigma)
 
     # Detect blobs
     blobs = blob_log(image=smoothed, min_sigma=min_sigma, max_sigma=max_sigma, exclude_border=exclude_border)
 
     if blobs.shape[0] == 0:
-        return np.empty((0, 3)), np.empty((0, 2)), np.array([])
+
+         # if true positive and classified as negative: False negative
+        if status == 'v': 
+            return np.empty((0, 3)), np.empty((0, 2)), np.array([]), [box_id, 0, 0, "x", 0, 1]
+
+        # if true negative and classified as negative: True negative
+        if status == 'x': 
+            return np.empty((0, 3)), np.empty((0, 2)), np.array([]), [box_id, 0, 0, "x", 0, 0]
+
+        
     
     # Select the blob with the largest radius (sigma)
     largest_blob_idx = np.argmax(blobs[:, 2])
@@ -153,7 +389,67 @@ def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=5
     coordinates_rescaled = coordinates * scale
     radii_rescaled = radii * scale
 
-    return blob, coordinates_rescaled, radii_rescaled
+    # Filter 1 to filter out blurry images
+    filter_1_pass, laplacian_var = filter_1(box_id, img, F1_LVThresh, coordinates_rescaled, radii_rescaled)
+
+    # CSV--------------------------------
+
+  
+
+    # FP_list = [45, 46, 47, 48, 49, 50, 54, 55, 57, 69, 72, 75, 76, 86, 94, 133, 142, 162, 215, 
+    #            216, 242, 243, 255, 256, 309, 310, 311, 312, 335, 338, 380, 412, 490, 506, 515, 
+    #            539, 538, 547, 548, 550, 552, 558, 573, 579, 580, 581, 582, 583, 598, 599, 601, 
+    #            603, 606, 625, 653, 664, 665, 666, 668]
+
+    # Filter 2 on images that passed bluriness filter and are considered clear
+    if filter_1_pass:
+        # if box_id in FP_list:
+        #     print({box_id}, "Wrongfully included through filter 1")
+
+        # reassign parameters to the thing taken by filter 2 (should be made neat later)
+        c_sigma = F2_sigma
+        blurred = F2_binaryThresh
+        c_thresh = F2_circThresh
+
+        filter_2_pass, circularity = filter_2(box_id, img, c_sigma, c_thresh, blurred, coordinates_rescaled, radii_rescaled)
+        
+    else: 
+        # if box_id in FP_list:
+        #     print({box_id}, "Correctly filtered out by filter 1")
+
+        # if true positive and classified as negative: False negative
+        if status == 'v': 
+            return np.empty((0, 3)), np.empty((0, 2)), np.array([]), [box_id, laplacian_var, 0, "x", 0, 1]
+            
+
+        # if true negative and classified as negative: True negative
+        if status == 'x': 
+            return np.empty((0, 3)), np.empty((0, 2)), np.array([]), [box_id, laplacian_var, 0, "x", 0, 0]
+
+
+
+    # if it passes filter 2, we keep it.
+    if filter_2_pass:
+
+        # if true positive and classified as positive: True positive
+        if status == 'v': 
+            return blob, coordinates_rescaled, radii_rescaled, [box_id, laplacian_var, circularity, "v", 0, 0]
+
+        
+        # if true negative and classified as positive: False positive
+        if status == 'x':
+            return blob, coordinates_rescaled, radii_rescaled, [box_id, laplacian_var, circularity, "v", 1, 0]
+
+    
+    else: 
+        # if true positive and classified as negative: False negative
+        if status == 'v': 
+            return np.empty((0, 3)), np.empty((0, 2)), np.array([]), [box_id, laplacian_var, circularity, "x", 0, 1]
+
+        # if true negative and classified as negative: True negative
+        if status == 'x': 
+            return np.empty((0, 3)), np.empty((0, 2)), np.array([]), [box_id, laplacian_var, circularity, "x", 0, 0]
+            
 
 
 def analyse_by_grid(tiff, grid_mask, marker, condition, repeat, downscale_factor=0.25, mask=True, rescale_switch=True):
@@ -220,8 +516,8 @@ def analyse_by_grid(tiff, grid_mask, marker, condition, repeat, downscale_factor
     # save npz file
     save_path = f"{heading_npz}_{scale_status}_boxes.npz"
     np.savez_compressed(save_path, *upscaled_boxes)
-    print(f"Saved {len(upscaled_boxes)} boxes to {save_path}")
-    print(f"Boxes done")
+    # print(f"Saved {len(upscaled_boxes)} boxes to {save_path}")
+    # print(f"Boxes done")
     return upscaled_boxes
 
 
@@ -257,7 +553,7 @@ def crop_and_save(args):
     os.makedirs(f"{heading}", exist_ok=True)
 
     plt.imsave(f"{heading}/{box_id}.tiff", cropped_small, cmap='gray') 
-    print(f"added Box {box_id}")
+    # print(f"added Box {box_id}")
     return cropped_small
 
 
@@ -299,7 +595,7 @@ def load_boxes(path):
     return [data[key] for key in data]
 
 
-def process_box(args):
+def process_box(box_args, img_box_args, F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh):
     '''
     Detects blobs in a single image box, saves the results, and returns coordinates and radii.
 
@@ -323,25 +619,34 @@ def process_box(args):
         - Uses the `detect_blobs()` function for blob detection.
         - Ensures returned arrays have consistent shape using `np.atleast_2d` and `np.ravel`.
     '''
-    box_id, box = args
-    blob, coordinates, radii = detect_blobs(box)
 
-    # removed saving blobs seperately as I just wanto save all radii and coordinates at the end     
+    box_id, mask_box = box_args
+    _, img_box = img_box_args
+
+    blob, coordinates, radii, csv_array = detect_blobs(box_id, mask_box, img_box, F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh)
+
+    # dupa check
+
+    # if box_id == 380:
+    #     blob, coordinates, radii = detect_blobs(box_id, mask_box, img_box)
+    # else:
+    #     return None, None, None
+    
 
     if len(blob) == 1:
-        print(f"Saved blob for box {box_id}")
+        # print(f"Saved blob for box {box_id}")
         model_found = True
-    elif len(blob) == 0:
-        print(f"X No blobs detected in box {box_id}")
+    else: 
+        # print(f"X No blobs detected in box {box_id}")
         model_found = False
-    else:
-        print(f"X Unexpected blob count in box {box_id} (count: {len(blob)})")
+
 
     coordinates = np.atleast_2d(coordinates)
     radii = np.ravel(radii)
-    return coordinates, radii, model_found
+    
+    return coordinates, radii, model_found, csv_array
 
-def detect_blob_in_all_boxes(mask_boxes):
+def detect_blob_in_all_boxes(mask_boxes, img_boxes, F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh):
     '''
     Detects blobs in a list of image or mask boxes in parallel and collects their coordinates and radii.
 
@@ -363,18 +668,37 @@ def detect_blob_in_all_boxes(mask_boxes):
     all_radii = []
     model_count = 0
 
+
     box_args = [(i + 1, box) for i, box in enumerate(mask_boxes)]  # (box_id, box)
+    img_box_args = [(i + 1, box) for i, box in enumerate(img_boxes)]  # (box_id, box)
 
     with ThreadPoolExecutor() as executor:
-        results = executor.map(process_box, box_args)  # preserves order
+        results = executor.map(process_box, box_args, img_box_args, repeat(F1_LVThresh), repeat(F2_sigma), repeat(F2_binaryThresh), repeat(F2_circThresh))  # preserves order
 
-    for coords, rads, model_found in results:
-        all_coordinates.append(coords)
-        all_radii.append(rads)
-        if model_found:
-            model_count = model_count + 1
+        # append to csv 
+        df = pd.read_csv('meta.csv', na_values=['', 'nan'])
+        df['classification'] = df['classification'].astype(str)
 
-        return all_coordinates, all_radii, model_count
+
+        for coords, rads, model_found, csv_array in results:
+            all_coordinates.append(coords)
+            all_radii.append(rads)
+            if model_found:
+                model_count = model_count + 1
+
+            # print(csv_array)
+            box_id, lv, circ, classification, fp, fn = csv_array
+            # print(box_id, lv, circ, classification, fp, fn)
+
+        
+            df.loc[df['box_id'] == box_id, ['LV', 'circularity', 'classification', 'FP_score', 'FN_score']] =  [float(lv), float(circ), str(classification), float(fp), float(fn)]
+
+        df.to_csv(f"metas/meta_{F1_LVThresh}_{F2_sigma}_{F2_binaryThresh}_{F2_circThresh}.csv", index=False)
+
+        
+
+
+    return all_coordinates, all_radii, model_count
 
 def set_radius(all_radii, radius):
     all_radii = [np.array([radius]) if r.size > 0 else r for r in all_radii]
@@ -425,7 +749,7 @@ def make_grid_and_split_all(markers, conditions, repeat_no, output_list=False):
         return mask_boxes_list, img_boxes_list
 
 
-def detect_blob_all(markers, conditions, repeat_no):
+def detect_blob_all(markers, conditions, repeat_no, F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh):
     blob_output_paths = []
 
     for repeat in repeat_no:
@@ -441,31 +765,31 @@ def detect_blob_all(markers, conditions, repeat_no):
                 os.makedirs(blobs_output_directory, exist_ok=True)
                 
                 # A. RELOAD: IMAGE, MASK BOXES 
-                print(f"------------------------Starting Load mask boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                # print(f"------------------------Starting Load mask boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
                 mask_boxes = load_boxes(mask_boxes_path) 
-                print(f"------------------------Finished Load mask boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                # print(f"------------------------Finished Load mask boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
 
-                print(f"------------------------Starting Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                # print(f"------------------------Starting Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
                 img_boxes = load_boxes(image_boxes_path)
-                print(f"------------------------Finished Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                # print(f"------------------------Finished Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
 
     
                 # B. DETECT BLOB IN EACH MASK BOX AND SAVE
-                print(f"------------------------Starting Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
-                all_coordinates, all_radii, model_count = detect_blob_in_all_boxes(mask_boxes)
-                print(f"Models detected: {model_count}/676")
-                print(f"------------------------Finished Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                # print(f"------------------------Starting Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                all_coordinates, all_radii, model_count = detect_blob_in_all_boxes(mask_boxes, img_boxes, F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh)
+                # print(f"Models detected: {model_count}/676")
+                # print(f"------------------------Finished Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
 
 
                 # save all outputs for easy visualization and further analysis
-                print(f"------------------------Saving Blob detection outputs for repeat: {repeat}, condition: {condition}, marker: {marker} in {blobs_output_path}")
+                # print(f"------------------------Saving Blob detection outputs for repeat: {repeat}, condition: {condition}, marker: {marker} in {blobs_output_path}")
                 
-                print(f"------------------------{blobs_output_path} info:")
-                print("mask_boxes:", type(mask_boxes), len(mask_boxes), type(mask_boxes[0]))
-                print("img_boxes:",type(img_boxes), len(img_boxes), type(img_boxes[0]))
-                print("all_coordinates:",type(all_coordinates), len(all_coordinates), type(all_coordinates[0]))
-                print("all_radii:",type(all_radii), len(all_radii), type(all_radii[0]))
-                print(f"------------------------")
+                # print(f"------------------------{blobs_output_path} info:")
+                # print("mask_boxes:", type(mask_boxes), len(mask_boxes), type(mask_boxes[0]))
+                # print("img_boxes:",type(img_boxes), len(img_boxes), type(img_boxes[0]))
+                # print("all_coordinates:",type(all_coordinates), len(all_coordinates), type(all_coordinates[0]))
+                # print("all_radii:",type(all_radii), len(all_radii), type(all_radii[0]))
+                # print(f"------------------------")
                 
                 np.savez(blobs_output_path,
                         mask_boxes=np.array(mask_boxes, dtype=object),
@@ -478,4 +802,4 @@ def detect_blob_all(markers, conditions, repeat_no):
     with open("blob_output_paths.txt", "a") as f:
         for path in blob_output_paths:
             f.write(path + "\n")
-    print("Finshed putting all blob output paths to blob_output_paths.txt")
+    # print("Finshed putting all blob output paths to blob_output_paths.txt")

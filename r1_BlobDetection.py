@@ -2,6 +2,8 @@ from f_intensityMeasurement import *
 from f_modelDetection import *
 from f_preprocessing import *
 from f_validation import *
+from meta_analysis import calculate_fp_fn
+
 
 # START TIMER
 start_time = time.time() 
@@ -20,7 +22,7 @@ blob_output_paths = "blob_output_paths.txt"
 bPREPROCESSING_1 = False
 bPREPROCESSING_2 = False
 bBLOB_DECETION_1 = False
-bBLOB_DECETION_2 = False
+bBLOB_DECETION_2 = True
 
 # PREPROCESSING 1: SPLIT CZI INTO TIFFS
 if bPREPROCESSING_1:
@@ -37,7 +39,40 @@ if bBLOB_DECETION_1:
 
 # BLOB DETECTION 2: BLOB DETECTION IN DAPI MASK BOX AND SAVE
 if bBLOB_DECETION_2:
-    detect_blob_all(markers=["DAPI"], conditions=["WT"], repeat_no=[1])
+
+    # Define the parameters
+    F1_LVThresh = 400000
+    F2_sigma = 20
+    F2_binaryThresh = 0.083
+    F2_circThresh = 0.5
+
+    # Iterate over every possible combination
+    print("Laplaican Value Thresh:", F1_LVThresh)
+    print("Circularity Smoothness:", F2_sigma)
+    print("Binary Mask Thresh:", F2_binaryThresh)
+    print("Circularity Thresh:", F2_circThresh)
+
+
+    detect_blob_all(["DAPI"], ["WT"], [1], F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh)
+    
+    print("Finished Running Detection!")
+
+    meta_path = f"metas/meta_{F1_LVThresh}_{F2_sigma}_{F2_binaryThresh}_{F2_circThresh}.csv"
+    meta_analysis_path = "meta_analysis.csv"
+
+    total_fp, total_fn = calculate_fp_fn(meta_path)
+    score = 100 - ((total_fp+total_fn)/676 * 100)
+
+    # The row you want to append (as a list)
+    new_row = [F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh, total_fp, total_fn, score]
+
+    # Open the CSV file in append mode ('a')
+    with open(meta_analysis_path, 'a', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(new_row)
+    
+    print("Saved Score to:", meta_analysis_path)
+
 
 
 # END TIMER
