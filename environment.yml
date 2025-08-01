@@ -1,0 +1,20 @@
+name: urop-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas
+  - matplotlib
+  - seaborn
+  - scikit-image
+  - scipy
+  - opencv
+  - imageio
+  - tifffile
+  - czifile
+  - aicspylibczi
+  - csbdeep
+  - napari
+  - pip

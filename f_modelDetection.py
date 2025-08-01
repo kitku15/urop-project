@@ -164,7 +164,6 @@ def circularity_filter(area, c_thresh, box_id, filter_no):
     regions, binary_mask = area
     circularity_pass = False
     circular_blobs = []
-    c_thresh = 0
 
     # Filter by circularity
     for region in regions:
@@ -343,7 +342,7 @@ def detect_blobs(box_id, tiff, img, F1_LVThresh, F2_sigma, F2_binaryThresh, F2_c
     '''
 
     # open csv 
-    df = pd.read_csv("backup/meta.csv")
+    df = pd.read_csv("meta.csv")
 
     # Find the row by box_id
     row = df.loc[df['box_id'] == box_id]
@@ -634,10 +633,10 @@ def process_box(box_args, img_box_args, F1_LVThresh, F2_sigma, F2_binaryThresh, 
     
 
     if len(blob) == 1:
-        # print(f"Saved blob for box {box_id}")
+        print(f"Saved blob for box {box_id}")
         model_found = True
     else: 
-        # print(f"X No blobs detected in box {box_id}")
+        print(f"X No blobs detected in box {box_id}")
         model_found = False
 
 
@@ -692,6 +691,8 @@ def detect_blob_in_all_boxes(mask_boxes, img_boxes, F1_LVThresh, F2_sigma, F2_bi
 
         
             df.loc[df['box_id'] == box_id, ['LV', 'circularity', 'classification', 'FP_score', 'FN_score']] =  [float(lv), float(circ), str(classification), float(fp), float(fn)]
+
+        os.makedirs("metas", exist_ok=True)
 
         df.to_csv(f"metas/meta_{F1_LVThresh}_{F2_sigma}_{F2_binaryThresh}_{F2_circThresh}.csv", index=False)
 
@@ -765,31 +766,31 @@ def detect_blob_all(markers, conditions, repeat_no, F1_LVThresh, F2_sigma, F2_bi
                 os.makedirs(blobs_output_directory, exist_ok=True)
                 
                 # A. RELOAD: IMAGE, MASK BOXES 
-                # print(f"------------------------Starting Load mask boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                print(f"------------------------Starting Load mask boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
                 mask_boxes = load_boxes(mask_boxes_path) 
-                # print(f"------------------------Finished Load mask boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                print(f"------------------------Finished Load mask boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
 
-                # print(f"------------------------Starting Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                print(f"------------------------Starting Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
                 img_boxes = load_boxes(image_boxes_path)
-                # print(f"------------------------Finished Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                print(f"------------------------Finished Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
 
     
                 # B. DETECT BLOB IN EACH MASK BOX AND SAVE
-                # print(f"------------------------Starting Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                print(f"------------------------Starting Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
                 all_coordinates, all_radii, model_count = detect_blob_in_all_boxes(mask_boxes, img_boxes, F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh)
-                # print(f"Models detected: {model_count}/676")
-                # print(f"------------------------Finished Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                print(f"Models detected: {model_count}/676")
+                print(f"------------------------Finished Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
 
 
                 # save all outputs for easy visualization and further analysis
-                # print(f"------------------------Saving Blob detection outputs for repeat: {repeat}, condition: {condition}, marker: {marker} in {blobs_output_path}")
+                print(f"------------------------Saving Blob detection outputs for repeat: {repeat}, condition: {condition}, marker: {marker} in {blobs_output_path}")
                 
-                # print(f"------------------------{blobs_output_path} info:")
-                # print("mask_boxes:", type(mask_boxes), len(mask_boxes), type(mask_boxes[0]))
-                # print("img_boxes:",type(img_boxes), len(img_boxes), type(img_boxes[0]))
-                # print("all_coordinates:",type(all_coordinates), len(all_coordinates), type(all_coordinates[0]))
-                # print("all_radii:",type(all_radii), len(all_radii), type(all_radii[0]))
-                # print(f"------------------------")
+                print(f"------------------------{blobs_output_path} info:")
+                print("mask_boxes:", type(mask_boxes), len(mask_boxes), type(mask_boxes[0]))
+                print("img_boxes:",type(img_boxes), len(img_boxes), type(img_boxes[0]))
+                print("all_coordinates:",type(all_coordinates), len(all_coordinates), type(all_coordinates[0]))
+                print("all_radii:",type(all_radii), len(all_radii), type(all_radii[0]))
+                print(f"------------------------")
                 
                 np.savez(blobs_output_path,
                         mask_boxes=np.array(mask_boxes, dtype=object),

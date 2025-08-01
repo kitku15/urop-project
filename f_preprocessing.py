@@ -92,7 +92,7 @@ def crop_tiff(tiff_path, ymin, ymax, xmin, xmax, rotate_angle):
 
 def crop_all_tiffs_in_repeat(directory, repeat, condition, markers, ymin, ymax, xmin, xmax, rotate_angle, visualize=False, mask=False):
     
-    full_directory = f"{directory}\REPEAT{repeat}"
+    full_directory = f"{directory}/REPEAT{repeat}"
     output_folder = "CROPPED"
     
 
@@ -183,5 +183,5 @@ def crop_all(directory, cropping_csv_path, conditions, repeat_no, markers):
     for condition in conditions:
         for i in repeat_no:
             ymin, ymax, xmin, xmax, rotate_angle = get_crop_coordinates(cropping_csv_path, repeat=i, condition=condition)
-            crop_all_tiffs_in_repeat(directory=directory, repeat=i, condition=condition, markers=markers, ymin=ymin, ymax=ymax, xmin=xmin, xmax=xmax, rotate_angle=rotate_angle, visualize=False, mask=False)
+            # crop_all_tiffs_in_repeat(directory=directory, repeat=i, condition=condition, markers=markers, ymin=ymin, ymax=ymax, xmin=xmin, xmax=xmax, rotate_angle=rotate_angle, visualize=False, mask=False)
             crop_all_tiffs_in_repeat(directory=directory, repeat=i, condition=condition, markers=markers, ymin=ymin, ymax=ymax, xmin=xmin, xmax=xmax, rotate_angle=rotate_angle, visualize=False, mask=True)

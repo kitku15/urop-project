@@ -11,7 +11,7 @@ start_time = time.time()
 # CONSTANT INFO:
 # list of markers (index according to marker where 1:DAPI, 2:SOX2, 3:BRA, 4:GATA3)
 # I currently only have mask for REPEAT 1, WT 
-markers = ["DAPI", "SOX2", "BRA", "GATA3"]
+markers = ["DAPI"]
 conditions = ["WT"]
 repeat_no = [1]
 directory = "CHIP_REPEATS"
@@ -21,8 +21,8 @@ blob_output_paths = "blob_output_paths.txt"
 # bools to trigger what to run
 bPREPROCESSING_1 = False
 bPREPROCESSING_2 = False
-bBLOB_DECETION_1 = False
-bBLOB_DECETION_2 = True
+bBLOB_DECETION_1 = True
+bBLOB_DECETION_2 = False
 
 # PREPROCESSING 1: SPLIT CZI INTO TIFFS
 if bPREPROCESSING_1:

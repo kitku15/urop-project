@@ -85,21 +85,12 @@ def run_and_log(params):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--lv', type=float, required=True)
+    parser.add_argument('--sigma', type=float, required=True)
+    parser.add_argument('--b_thresh', type=float, required=True)
+    parser.add_argument('--c_thresh', type=float, required=True)
+    args = parser.parse_args()
 
-    # combination of parameters to try 
-    F1_LVThresh = np.arange(300000, 500001, 50000)
-    F2_sigma = np.arange(10, 31, 4)
-    F2_binaryThresh = np.round(np.arange(0.050, 0.1001, 0.01), 3)
-    F2_circThresh = np.round(np.arange(0.3, 0.91, 0.2), 2)
-
-    param_combos = list(product(F1_LVThresh, F2_sigma, F2_binaryThresh, F2_circThresh))
-
-    print(f"Total combinations to run: {len(param_combos)}")
-    os.makedirs(meta_dir, exist_ok=True)  # Ensure meta folder exists
-
-    with Pool(processes=cpu_count()) as pool:
-        pool.map(run_and_log, param_combos)
-
-    # END TIMER
-    end_time = time.time()
-    print(f"\nScript completed in {end_time - start_time:.2f} seconds.")
+    param = (args.lv, args.sigma, args.b_thresh, args.c_thresh)
+    run_and_log(param)
