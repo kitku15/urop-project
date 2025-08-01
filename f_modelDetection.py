@@ -164,7 +164,6 @@ def circularity_filter(area, c_thresh, box_id, filter_no):
     regions, binary_mask = area
     circularity_pass = False
     circular_blobs = []
-    c_thresh = 0
 
     # Filter by circularity
     for region in regions:
@@ -207,7 +206,10 @@ def circularity_filter(area, c_thresh, box_id, filter_no):
     if circular_blobs:
         # Find the blob with the largest area
         largest_blob, best_circularity = max(circular_blobs, key=lambda x: x[0].area)
-        return True, best_circularity
+        if best_circularity > c_thresh:
+            return True, best_circularity
+        else: 
+            return False, 0
     else:
         return False, 0
     
@@ -256,11 +258,11 @@ def filter_1(box_id, img_box, F1_LVThresh, coordinates_rescaled, radii_rescaled)
 
     if laplacian_var > thresh:
         filter_1_pass = True
-        # print({box_id}, "Is a clear Image. Passed filter 1. Small Lap Value:", laplacian_var)
+        print({box_id}, "Is a clear Image. Passed filter 1. Small Lap Value:", laplacian_var)
 
     else:
         filter_1_pass = False
-        # print({box_id}, "Is a blurry Image. Failed filter 1, throwing it out.. Small Lap Value:", laplacian_var)
+        print({box_id}, "Is a blurry Image. Failed filter 1, throwing it out.. Small Lap Value:", laplacian_var)
         
     return filter_1_pass, laplacian_var
 
@@ -298,19 +300,19 @@ def filter_2(box_id, img_box, sigma, c_thresh, blurred, coordinates_rescaled, ra
     # Apply filters
     filter_no = 2
     circularity_pass, circularity = circularity_filter(whole, c_thresh, box_id, filter_no)
-    # print({box_id}, f'Circularity is: {circularity:.3f}')
+    print({box_id}, f'Circularity is: {circularity:.3f}')
     
     border_pass  = border_filter(whole)
 
     # print details of filtering
-    # if not circularity_pass:
-        # print({box_id}, "Failed Filter 2 Circularity.. throwing it out")
-    # if not border_pass:
-        # print({box_id}, "Failed Filter 2 Border.. throwing it out")
+    if not circularity_pass:
+        print({box_id}, "Failed Filter 2 Circularity.. throwing it out")
+    if not border_pass:
+        print({box_id}, "Failed Filter 2 Border.. throwing it out")
 
     if circularity_pass and border_pass:
         filter_2_pass = True
-        # print({box_id}, "Passed Filter 2, Included in analysis!")
+        print({box_id}, "Passed Filter 2, Included in analysis!")
     else:
         filter_2_pass = False
 
@@ -404,7 +406,7 @@ def detect_blobs(box_id, tiff, img, F1_LVThresh, F2_sigma, F2_binaryThresh, F2_c
     # Filter 2 on images that passed bluriness filter and are considered clear
     if filter_1_pass:
         # if box_id in FP_list:
-        #     print({box_id}, "Wrongfully included through filter 1")
+            # print({box_id}, "Wrongfully included through filter 1")
 
         # reassign parameters to the thing taken by filter 2 (should be made neat later)
         c_sigma = F2_sigma
@@ -516,8 +518,8 @@ def analyse_by_grid(tiff, grid_mask, marker, condition, repeat, downscale_factor
     # save npz file
     save_path = f"{heading_npz}_{scale_status}_boxes.npz"
     np.savez_compressed(save_path, *upscaled_boxes)
-    # print(f"Saved {len(upscaled_boxes)} boxes to {save_path}")
-    # print(f"Boxes done")
+    print(f"Saved {len(upscaled_boxes)} boxes to {save_path}")
+    print(f"Boxes done")
     return upscaled_boxes
 
 
@@ -634,7 +636,7 @@ def process_box(box_args, img_box_args, F1_LVThresh, F2_sigma, F2_binaryThresh, 
     
 
     if len(blob) == 1:
-        # print(f"Saved blob for box {box_id}")
+        print(f"Saved blob for box {box_id}")
         model_found = True
     else: 
         # print(f"X No blobs detected in box {box_id}")

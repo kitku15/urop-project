@@ -42,9 +42,9 @@ if bBLOB_DECETION_2:
 
     # Define the parameters
     F1_LVThresh = 400000
-    F2_sigma = 20
-    F2_binaryThresh = 0.083
-    F2_circThresh = 0.5
+    F2_sigma = 10
+    F2_binaryThresh = 0.06
+    F2_circThresh = 0.7
 
     # Iterate over every possible combination
     print("Laplaican Value Thresh:", F1_LVThresh)
