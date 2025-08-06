@@ -97,6 +97,79 @@ def load_blobs(filename):
     
     return blob, coordinates, radii
 
+def load_allowed_ids(csv_path):
+    allowed_ids = []
+    with open(csv_path, newline='') as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) == 2 and row[1].strip().lower() == 'yes':
+                allowed_ids.append(int(row[0]))
+    return allowed_ids
+
+
+def manual_selection(image_folder, output_csv):
+
+    # === Load images ===
+    image_files = [f for f in os.listdir(image_folder) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff'))]
+    image_files.sort()  # Optional: sort images for consistency
+    current_index = 0
+
+    # === Load existing labels if continuing ===
+    labels = {}
+    if os.path.exists(output_csv):
+        with open(output_csv, newline='') as f:
+            reader = csv.reader(f)
+            labels = {rows[0]: rows[1] for rows in reader}
+        # Remove already-labeled images
+        image_files = [img for img in image_files if img not in labels]
+
+    # === Tkinter Setup ===
+    root = Tk()
+    root.title("Image Labeler")
+
+    # === Image Display ===
+    label = Label(root)
+    label.pack()
+
+    def load_image():
+        if current_index >= len(image_files):
+            print("All images labeled!")
+            root.quit()
+            return
+        img_path = os.path.join(image_folder, image_files[current_index])
+        img = Image.open(img_path)
+        img.thumbnail((600, 600))  # Resize for screen
+        img_tk = ImageTk.PhotoImage(img)
+        label.config(image=img_tk)
+        label.image = img_tk  # Keep a reference!
+
+    def save_label(answer):
+        nonlocal current_index
+        image_name = image_files[current_index]
+        labels[image_name] = answer
+        with open(output_csv, 'a', newline='') as f:
+            writer = csv.writer(f)
+            number_only = image_name.split(".")[0]
+            writer.writerow([number_only, answer])
+        current_index += 1
+        load_image()
+
+    # === Buttons ===
+    btn_yes = Button(root, text="Yes (Y)", width=10, command=lambda: save_label('yes'))
+    btn_yes.pack(side='left', padx=20, pady=20)
+
+    btn_no = Button(root, text="No (N)", width=10, command=lambda: save_label('no'))
+    btn_no.pack(side='right', padx=20, pady=20)
+
+    # === Keyboard Shortcuts ===
+    root.bind('y', lambda event: save_label('yes'))
+    root.bind('n', lambda event: save_label('no'))
+
+    # === Start ===
+    load_image()
+    root.mainloop()
+
+
 
 def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=50, exclude_border=45):
     '''
@@ -124,12 +197,8 @@ def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=5
 
     downsampled = rescale(tiff, downscale_factor, anti_aliasing=True)  # 4x smaller
 
-    # #invert
-    # tiff = invert(tiff)
-    
     # Convert to float and normalize
     tiff = img_as_float(downsampled)
-
 
     # smooth
     smoothed = gaussian(tiff, sigma)
@@ -201,9 +270,6 @@ def analyse_by_grid(tiff, grid_mask, marker, condition, repeat, downscale_factor
     heading_npz = f"{npz_directory}/mask_{marker}_{condition}" if mask else f"{npz_directory}/img_{marker}_{condition}"
     heading_tiff = f"{tiff_directory}/mask_{marker}_{condition}" if mask else f"{tiff_directory}/img_{marker}_{condition}"
 
-    # set scale status, not really used but Ill keep this for now
-    scale_status = "rescale" if rescale_switch else "NOrescale"
-
     # Crop and save tiffs individually (slow but good for manual visual checking)
     args_list = [(box_id, tiff_small, grid_mask_small, heading_tiff) for box_id in unique_boxes]
     with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -218,7 +284,7 @@ def analyse_by_grid(tiff, grid_mask, marker, condition, repeat, downscale_factor
         upscaled_boxes = cropped_boxes
 
     # save npz file
-    save_path = f"{heading_npz}_{scale_status}_boxes.npz"
+    save_path = f"{heading_npz}.npz"
     np.savez_compressed(save_path, *upscaled_boxes)
     print(f"Saved {len(upscaled_boxes)} boxes to {save_path}")
     print(f"Boxes done")
@@ -341,7 +407,7 @@ def process_box(args):
     radii = np.ravel(radii)
     return coordinates, radii, model_found
 
-def detect_blob_in_all_boxes(mask_boxes):
+def detect_blob_in_all_boxes(mask_boxes, selection_csv):
     '''
     Detects blobs in a list of image or mask boxes in parallel and collects their coordinates and radii.
 
@@ -359,11 +425,16 @@ def detect_blob_in_all_boxes(mask_boxes):
         - Preserves the original order of boxes in the returned lists.
         - Each box is expected to contain at most one detectable blob. Multiple or no blobs will trigger warning messages from `process_box()`.
     '''
+    # load manual selection 
+    selected_boxes_ids = load_allowed_ids(selection_csv)
+
     all_coordinates = []
     all_radii = []
     model_count = 0
 
-    box_args = [(i + 1, box) for i, box in enumerate(mask_boxes)]  # (box_id, box)
+    # only select boxes that are confirmed as pass
+    print(selected_boxes_ids)
+    box_args = [(i + 1, box) for i, box in enumerate(mask_boxes) if (i + 1) in selected_boxes_ids] # (box_id, box)
 
     with ThreadPoolExecutor() as executor:
         results = executor.map(process_box, box_args)  # preserves order
@@ -374,11 +445,7 @@ def detect_blob_in_all_boxes(mask_boxes):
         if model_found:
             model_count = model_count + 1
 
-        return all_coordinates, all_radii, model_count
-
-def set_radius(all_radii, radius):
-    all_radii = [np.array([radius]) if r.size > 0 else r for r in all_radii]
-    return all_radii
+    return all_coordinates, all_radii, model_count
 
 
 def make_grid_and_split_all(markers, conditions, repeat_no, output_list=False):
@@ -433,8 +500,8 @@ def detect_blob_all(markers, conditions, repeat_no):
             for marker in markers:
         
                 # getting directories
-                mask_boxes_path = f"boxes_npz/{repeat}/mask_{marker}_{condition}_NOrescale_boxes.npz"
-                image_boxes_path = f"boxes_npz/{repeat}/img_{marker}_{condition}_NOrescale_boxes.npz"
+                mask_boxes_path = f"boxes_npz/{repeat}/mask_{marker}_{condition}.npz"
+                image_boxes_path = f"boxes_npz/{repeat}/img_{marker}_{condition}.npz"
 
                 blobs_output_directory = f"blobs_npz/{repeat}"
                 blobs_output_path = f"{blobs_output_directory}/{marker}_{condition}.npz"
@@ -448,11 +515,23 @@ def detect_blob_all(markers, conditions, repeat_no):
                 print(f"------------------------Starting Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
                 img_boxes = load_boxes(image_boxes_path)
                 print(f"------------------------Finished Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                
+                
+                # B. MANUALLY REVIEW WHICH BOXES TO INCLUDE AND WHICH TO LEAVE OUT
+                print(f"------------------------Starting Manual Selection for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                images_folder = f"boxes_tiff/{repeat}/img_{marker}_{condition}"
 
-    
-                # B. DETECT BLOB IN EACH MASK BOX AND SAVE
+                selection_output_dir = f"selection/{repeat}"
+                os.makedirs(selection_output_dir, exist_ok=True)
+
+                selection_csv = f"{selection_output_dir}/img_DAPI_{condition}.csv"
+                manual_selection(images_folder, selection_csv)
+                print(f"------------------------Finished Manual Selection for repeat: {repeat}, condition: {condition}, marker: {marker}")
+
+
+                # C. DETECT BLOB IN EACH MASK BOX AND SAVE
                 print(f"------------------------Starting Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
-                all_coordinates, all_radii, model_count = detect_blob_in_all_boxes(mask_boxes)
+                all_coordinates, all_radii, model_count = detect_blob_in_all_boxes(mask_boxes, selection_csv)
                 print(f"Models detected: {model_count}/676")
                 print(f"------------------------Finished Blob detection for repeat: {repeat}, condition: {condition}, marker: {marker}")
 

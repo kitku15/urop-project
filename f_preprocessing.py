@@ -76,6 +76,7 @@ def crop_tiff(tiff_path, ymin, ymax, xmin, xmax, rotate_angle):
     # original_dimensions = image_squeezed.shape
     # print("original dimensions:", original_dimensions)
     print(f"\nProcessing {tiff_path}")
+    print(ymin, ymax, xmin, xmax, rotate_angle)
     # rotateing if needed
     if rotate_angle != 0:
         print(f"rotating this much: {rotate_angle}")
@@ -99,7 +100,7 @@ def crop_all_tiffs_in_repeat(directory, repeat, condition, markers, ymin, ymax, 
     img_dict = {}
     for marker in markers:
         if mask:
-            img = crop_tiff(f"{full_directory}/{marker}_{condition}_mask.tiff", ymin, ymax, xmin, xmax, rotate_angle)
+            img = crop_tiff(f"{full_directory}/{condition}_{marker}_mask.tiff", ymin, ymax, xmin, xmax, rotate_angle)
             img_dict[f"mask_{marker}"] = img
         else:
             img = crop_tiff(f"{full_directory}/{condition}_{marker}.tiff", ymin, ymax, xmin, xmax, rotate_angle)

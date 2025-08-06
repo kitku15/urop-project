@@ -10,7 +10,7 @@ start_time = time.time()
 # list of markers (index according to marker where 1:DAPI, 2:SOX2, 3:BRA, 4:GATA3)
 # I currently only have mask for REPEAT 1, WT 
 markers = ["DAPI", "SOX2", "BRA", "GATA3"]
-conditions = ["WT"]
+conditions = ["ND6"]
 repeat_no = [1]
 directory = "CHIP_REPEATS"
 cropping_csv_path = "cropping.csv"
@@ -37,7 +37,7 @@ if bBLOB_DECETION_1:
 
 # BLOB DETECTION 2: BLOB DETECTION IN DAPI MASK BOX AND SAVE
 if bBLOB_DECETION_2:
-    detect_blob_all(markers=["DAPI"], conditions=["WT"], repeat_no=[1])
+    detect_blob_all(markers=["DAPI"], conditions=["ND6"], repeat_no=[1])
 
 
 # END TIMER

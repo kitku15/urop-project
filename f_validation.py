@@ -175,10 +175,18 @@ def pad_to_shape(arr, target_shape):
     pad_right = pad_w - pad_left
 
     padded = np.pad(arr, ((pad_top, pad_bottom), (pad_left, pad_right)), mode='constant')
-    return padded, (pad_left, pad_top)  # x, y shift
+    return padded, (-pad_right, -pad_bottom)  # x, y shift
 
+def load_allowed_ids(csv_path):
+    allowed_ids = []
+    with open(csv_path, newline='') as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) == 2 and row[1].strip().lower() == 'yes':
+                allowed_ids.append(int(row[0]))
+    return allowed_ids
 
-def slider_visual(
+def slider_visual(selected_boxes_ids,
     img_boxes_list,
     mask_boxes_list,
     all_coordinates_list,
@@ -230,26 +238,30 @@ def slider_visual(
         adjusted_mid = []
         adjusted_inner = []
 
-        for i in range(len(img_boxes)):
-            padded_img, (shift_x, shift_y) = pad_to_shape(img_boxes[i], target_shape)
-            padded_mask, _ = pad_to_shape(mask_boxes[i], target_shape)
+        # print("Mapping of Number on Napari to Image no.---------------")
+
+        for id in range(len(selected_boxes_ids)):
+            # print(f"{id}: {selected_boxes_ids[id]}")
+                  
+            padded_img, (shift_x, shift_y) = pad_to_shape(img_boxes[selected_boxes_ids[id]-1], target_shape)
+            padded_mask, _ = pad_to_shape(mask_boxes[selected_boxes_ids[id]-1], target_shape)
 
             img_boxes_padded.append(padded_img)
             mask_boxes_padded.append(padded_mask)
 
-            coords = coordinates[i]
+            coords = coordinates[id]
             if len(coords) > 0:
                 adj_coords = coords + np.array([shift_x, shift_y])
             else:
                 adj_coords = coords  # empty
 
             adjusted_coords.append(adj_coords)
-            adjusted_outer.append(outer_r[i])
-            adjusted_mid.append(mid_r[i])
-            adjusted_inner.append(inner_r[i])
+            adjusted_outer.append(outer_r[id])
+            adjusted_mid.append(mid_r[id])
+            adjusted_inner.append(inner_r[id])
 
             if print_info:
-                print(f"  Box {i}: shift=({shift_y}, {shift_x}) coords adjusted")
+                print(f"  Box {id}: shift=({shift_y}, {shift_x}) coords adjusted")
 
         img_stack = np.stack(img_boxes_padded)
         mask_stack = np.stack(mask_boxes_padded).astype(np.uint8)
@@ -262,6 +274,20 @@ def slider_visual(
             sizes = []
 
             for t, (coords, radii) in enumerate(zip(coords_list, radii_list)):
+
+                print(coords, radii)
+                
+                if coords.ndim == 1 and coords.shape[0] == 2:
+                    coords = coords[np.newaxis, :]
+
+                if radii.ndim == 0:
+                    radii = np.array([radii])
+
+                if len(coords) != len(radii):
+                    print(f"!!! MISMATCH at time {t}: coords={len(coords)}, radii={len(radii)}")
+                else:
+                    print(f"OK at time {t}: coords={len(coords)}, radii={len(radii)}")
+
                 if len(coords) > 0:
                     time_coords = np.column_stack((np.full(len(coords), t), coords))
                     points.append(time_coords)
@@ -273,6 +299,10 @@ def slider_visual(
                 all_points = np.empty((0, 3))
                 all_sizes = np.empty((0,))
 
+            print(">>> FINAL total points:", all_points.shape)
+            print(">>> FINAL total sizes:", all_sizes.shape)
+
+
             viewer.add_points(
                 all_points,
                 size=all_sizes,
@@ -281,6 +311,10 @@ def slider_visual(
                 border_width=0.0,
                 opacity=0.2
             )
+
+        print(len(adjusted_coords))
+        print(len(adjusted_outer))
+
 
         add_blobs(adjusted_coords, adjusted_outer, 'purple', 'Outer Blobs')
         add_blobs(adjusted_coords, adjusted_mid, 'yellow', 'Mid Blobs')
@@ -341,60 +375,118 @@ def safe_normalize(intensities, reference):
 
 
 
-def plot_all_markers(marker_intensities, output, norm_by_area=False):
+
+def plot_all_markers(marker_intensities, output):
     """
-    Plot a grouped bar chart showing inner/mid/outer intensities for each marker.
+    Plot a grouped bar chart showing intensities for inner/mid/outer levels,
+    with one bar per marker in each level group.
     """
     labels = ['inner', 'mid', 'outer']
-    colors = ['#00bcd4', '#ffeb3b', '#9c27b0']
-    area_dict = {
-        'inner': 27500.911392939724,
-        'mid': 28541.195418817155,
-        'outer': 67820.81241632822
-    }
+    colors = ['#00bcd4', '#ffeb3b', '#9c27b0']  # can now be reused per marker if needed
 
     markers = list(marker_intensities.keys())
     n_markers = len(markers)
     n_levels = 3  # inner, mid, outer
 
-    # Organize data for plotting
-    means = []
-    stds = []
+    # Preprocess mean and std per marker
+    means = {marker: [] for marker in markers}
+    stds = {marker: [] for marker in markers}
+
     for marker in markers:
         bins = marker_intensities[marker]
+        means[marker] = [np.nanmean(b) for b in bins]
+        stds[marker] = [np.nanstd(b) for b in bins]
 
-        if norm_by_area:
-            bins = [
-                bins[0] / area_dict['inner'],
-                bins[1] / area_dict['mid'],
-                bins[2] / area_dict['outer'],
-            ]
-
-        means.append([np.nanmean(b) for b in bins])
-        stds.append([np.nanstd(b) for b in bins])
-
-    means = np.array(means)  # shape: (n_markers, 3)
-    stds = np.array(stds)
-
-    x = np.arange(n_markers)
-    width = 0.25
+    # Plotting: x-axis is levels, each with multiple bars (one per marker)
+    x = np.arange(n_levels)  # positions for inner, mid, outer
+    width = 0.8 / n_markers  # shrink bar width to fit all markers
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    for i in range(n_levels):
-        ax.bar(x + i * width, means[:, i], width, yerr=stds[:, i], capsize=5,
-               label=labels[i], alpha=0.7, color=colors[i], edgecolor='black')
 
-    ax.set_xticks(x + width)
-    ax.set_xticklabels(markers)
+    for i, marker in enumerate(markers):
+        offset = (i - n_markers / 2) * width + width / 2
+        ax.bar(x + offset,
+               means[marker],
+               width,
+               yerr=stds[marker],
+               capsize=5,
+               label=marker,
+               alpha=0.8,
+               edgecolor='black')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
     ax.set_ylabel("Average Normalized Intensity")
-    ax.set_title("Intensity Levels per Marker")
-    ax.legend()
+    ax.set_title("Intensity per Region Level (Grouped by Marker)")
+    ax.legend(title="Marker")
     ax.grid(axis='y')
+
     plt.tight_layout()
     os.makedirs(os.path.dirname(output), exist_ok=True)
     plt.savefig(output)
     plt.close()
 
     print("Combined plot saved to:", output)
+
+
+def load_DAPI(condition, printing=True):
+    # open dapi npz
+    for path in read_paths():
+        if "DAPI" in path:
+            if condition in path:
+                DAPI_data = np.load(path, allow_pickle=True)
+                # get info from path 
+                stripped = os.path.splitext(path)[0]
+                info = stripped.split("/")
+                repeat = info[1]
+
+                info_2 = info[2].split("_")
+                marker = info_2[0]
+                condition = info_2[1]
+
+    # get DAPI info
+    DAPI_coordinates = DAPI_data['all_coordinates']
+    DAPI_radii = DAPI_data['all_radii']
+    DAPI_mask_boxes = DAPI_data['mask_boxes']
+    DAPI_img_boxes = DAPI_data['img_boxes']
+
+    radii = np.concatenate([r for r in DAPI_radii if r.size > 0])
+    max_radii = np.max(radii)
+    if printing:
+        print("biggest radius in DAPI list is:", max_radii)
+
+    # Define the value to fill with (once already adjusted)
+    outer_radius = 198.5618083164127
+    mid_radius = 133.5618083164127
+    inner_radius = 93.56180831641271
+
+    # keep track of radius per repeat and condition 
+    new_row = [repeat,condition,outer_radius,mid_radius,inner_radius]
+    with open('radius.csv', mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(new_row)
+
+    if printing:
+        print("outer radius set to:", outer_radius)
+        print("mid radius set to:", mid_radius)
+        print("inner radius set to:", inner_radius)
+
+    outer_radius_array = set_radius(DAPI_radii, outer_radius)
+    mid_radius_array = set_radius(DAPI_radii, mid_radius)
+    inner_radius_array = set_radius(DAPI_radii, inner_radius)
+
+    return DAPI_coordinates, DAPI_mask_boxes, DAPI_img_boxes, outer_radius_array, mid_radius_array, inner_radius_array, outer_radius, mid_radius, inner_radius
+
+def read_paths(filename="blob_output_paths.txt"):
+    with open(filename, "r") as f:
+        for line in f:
+            path = line.strip()  # Remove trailing newline and any extra spaces
+            if path:  # Skip empty lines if any
+                yield path
+
+
+def set_radius(all_radii, radius):
+    all_radii = [np.array([radius]) if r.size > 0 else r for r in all_radii]
+    return all_radii
 
 

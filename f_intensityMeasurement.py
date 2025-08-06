@@ -1,5 +1,7 @@
 from imports import *
-from r2_Radii_adjustment import read_paths, load_DAPI
+from f_coordFinder import get_info
+from f_modelDetection import load_allowed_ids, load_boxes
+from f_validation import read_paths
 
 
 
@@ -25,59 +27,153 @@ def normalize_tiff(tiff):
 
     return img_norm
 
-
-
-def measure_blob_intensity(image, center, radius, print_info=False):
-    """
-    Measures mean intensity inside a circular mask in a single image.
-
-    Parameters:
-        image (2D ndarray): Grayscale cropped image.
-        center (tuple): (x, y) center of the circle in pixel coordinates.
-        radius (float): Radius of the circular mask.
-
-    Returns:
-        float: Mean intensity inside the circle, or None if center/radius invalid.
-    """
-    
-    if print_info:
-        print("center shape:", center.shape)
-        print("center:",center)
-        print("radius shape:",radius.shape)
-        print("radius:",radius)
-
-
-    if center is None or center.shape != (1, 2):
-        return None
+def measure_blob_intensity_zones_R4(idx, image, center, radii):
 
     h, w = image.shape
     cx, cy = center[0]
-    r = radius
 
     yy, xx = np.ogrid[:h, :w]
-    mask = (xx - cx)**2 + (yy - cy)**2 <= r**2
-
-    values = image[mask]
-    return np.mean(values) if values.size > 0 else None
+    dist_sq = (xx - cx) ** 2 + (yy - cy) ** 2
 
 
-def measure_all_blob_intensities(img_boxes, all_coordinates, radius):
+
+def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_r, outer_r, print_info=False):
     """
-    Measures intensities for all blobs using a single radius value.
+    Measures intensity in three non-overlapping radial zones: inner, mid ring, outer ring.
+
+    Parameters:
+        marker (str): Name of the channel/marker (e.g., "DAPI", "MarkerX").
+        image (2D ndarray): Grayscale cropped image.
+        mask (2D ndarray): Binary mask (same size as image), where 1 indicates valid signal.
+        center (tuple): (x, y) center of the circles.
+        inner_r (float): Radius of inner circle.
+        mid_r (float): Radius of middle circle.
+        outer_r (float): Radius of outer circle.
+        print_info (bool): If True, prints debug info.
+
+    Returns:
+        tuple: (inner_mean, mid_bin_mean, outer_bin_mean)
+    """
+
+    h, w = image.shape
+    cx, cy = center[0]
+
+    yy, xx = np.ogrid[:h, :w]
+    dist_sq = (xx - cx) ** 2 + (yy - cy) ** 2
+
+    # Define radial bin masks
+    mask_inner = dist_sq <= inner_r**2
+    mask_mid = (dist_sq <= mid_r**2) & (~mask_inner)
+    mask_outer = (dist_sq <= outer_r**2) & (~(mask_inner | mask_mid))
+
+    # Total pixel counts in each zone
+    area_inner = np.count_nonzero(mask_inner)
+    area_mid = np.count_nonzero(mask_mid)
+    area_outer = np.count_nonzero(mask_outer)
+
+    # If marker is not "DAPI", apply binary intensity mask
+    if marker != "DAPI":
+        if image.shape != mask.shape:
+            raise ValueError(f"Image and mask must have the same shape, got {image.shape} and {mask.shape}")
+
+        # Apply signal mask: only count values where signal exists
+        signal_inner = image * ((mask > 0) & mask_inner)
+        signal_mid = image * ((mask > 0) & mask_mid)
+        signal_outer = image * ((mask > 0) & mask_outer)
+
+        # Sum signal only (not mean over signal area)
+        sum_inner = np.sum(signal_inner)
+        sum_mid = np.sum(signal_mid)
+        sum_outer = np.sum(signal_outer)
+
+        # Normalize to total area of radial bin
+        mean_inner = sum_inner / area_inner if area_inner > 0 else 0
+        mean_mid = sum_mid / area_mid if area_mid > 0 else 0
+        mean_outer = sum_outer / area_outer if area_outer > 0 else 0
+
+    else:
+        # For DAPI: no masking — use raw pixel intensities
+        mean_inner = np.sum(image[mask_inner]) / area_inner if area_inner > 0 else 0
+        mean_mid = np.sum(image[mask_mid]) / area_mid if area_mid > 0 else 0
+        mean_outer = np.sum(image[mask_outer]) / area_outer if area_outer > 0 else 0
+
+    
+    # if marker == "SOX2":
+    #     print("SOX2------------------")
+    #     print("inner", mean_inner)
+    #     print("mid", mean_mid)
+    #     print("outer", mean_outer)
+    
+
+    def visualize_zones(marker, image, mask, center, inner_r, mid_r, outer_r, output_path):
+        h, w = image.shape
+        cx, cy = center[0]
+
+        yy, xx = np.ogrid[:h, :w]
+        dist_sq = (xx - cx) ** 2 + (yy - cy) ** 2
+
+        # Define masks
+        mask_inner = dist_sq <= inner_r**2
+        mask_mid = (dist_sq <= mid_r**2) & (~mask_inner)
+        mask_outer = (dist_sq <= outer_r**2) & (~(mask_inner | mask_mid))
+
+        if marker != "DAPI":
+            if image.shape != mask.shape:
+                raise ValueError(f"Image and mask must have the same shape, got {image.shape} and {mask.shape}")
+            mask_inner &= (mask > 0)
+            mask_mid &= (mask > 0)
+            mask_outer &= (mask > 0)
+
+        # Create RGB image to show regions
+        overlay = np.stack([image]*3, axis=-1).astype(np.float32)  # Grayscale to RGB
+
+        overlay[mask_inner] = [255, 0, 0]    # Red for inner
+        overlay[mask_mid] = [0, 255, 0]      # Green for mid
+        overlay[mask_outer] = [0, 0, 255]    # Blue for outer
+
+        overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+
+        # Save with matplotlib (or cv2.imwrite if preferred)
+        plt.imsave(output_path, overlay)
+
+        print(f"Saved overlay to: {output_path}")
+    
+    if marker == "GATA3":
+        os.makedirs("intensities/visualize", exist_ok=True)
+        output_path = f'intensities/visualize/1_WT_{marker}_{idx+1}.png'
+        visualize_zones(marker, image, mask, center, inner_r, mid_r, outer_r, output_path)
+
+    return mean_inner, mean_mid, mean_outer
+
+
+
+
+def measure_all_blob_intensities_zones(marker, img_boxes, mask_boxes, coordinates, inner_radius, mid_radius, outer_radius):
+    """
+    Measures intensities for all blobs using constant inner, mid, and outer radii.
 
     Parameters:
         img_boxes (list of 2D ndarrays): Cropped grayscale images of blobs.
-        all_coordinates (list of arrays): Each is a (1, 2) array for center.
-        radius (float): Radius to use for all intensity measurements.
+        coordinates (list of arrays): Each is a (1, 2) array for the blob center.
+        inner_radius (float): Radius for the inner zone.
+        mid_radius (float): Radius for the mid zone.
+        outer_radius (float): Radius for the outer zone.
 
     Returns:
-        list of float or None: Mean intensities for each blob.
+        tuple of 3 lists: (inner_means, mid_means, outer_means)
     """
-    intensities = [
-        measure_blob_intensity(image, center, radius)
-        for image, center in zip(img_boxes, all_coordinates)
-    ]
-    return intensities
+    inner_means = []
+    mid_means = []
+    outer_means = []
+
+    for idx, (img, mask, center) in enumerate(zip(img_boxes, mask_boxes, coordinates)):
+        inner, mid, outer = measure_blob_intensity_zones(idx, marker, img, mask, center, inner_radius, mid_radius, outer_radius)
+        inner_means.append(inner)
+        mid_means.append(mid)
+        outer_means.append(outer)
+
+    return inner_means, mid_means, outer_means
+
 
 
 def get_radius(csv_path, current_repeat, current_condition):
@@ -95,84 +191,87 @@ def get_radius(csv_path, current_repeat, current_condition):
 
 
 
-def intensities_per_marker(marker, DAPI_coordinates, outer_r, mid_r, inner_r):
+def intensities_per_marker(condition, marker, coordinates, outer_r, mid_r, inner_r):
 
     for path in read_paths():
         if marker in path:
-            # path example: blobs_npz/1/GATA3_WT.npz
-            print("------------------------Now processing:", path)
+            if condition in path:
+                # path example: blobs_npz/1/GATA3_WT.npz
+                print("------------------------Now processing:", path)
+                
+                repeat, condition, _ = get_info(path)
+
+                # get selected ids:
+                selected_boxes_ids = load_allowed_ids(f'selection/{repeat}/img_DAPI_{condition}.csv')
+                selected_boxes_ids.sort()
+                # print("box ids:", selected_boxes_ids)
+                # print("length", len(selected_boxes_ids))
+
+                # load blobs output path 
+                # data = np.load(path, allow_pickle=True)
+
+                mask_boxes_path = f"boxes_npz/{repeat}/mask_{marker}_{condition}.npz"
+                image_boxes_path = f"boxes_npz/{repeat}/img_{marker}_{condition}.npz"
+                
+                img_boxes = load_boxes(image_boxes_path)
+                mask_boxes = load_boxes(mask_boxes_path)
+
+
+                # # Extracting img_boxes from data
+                # img_boxes = data['img_boxes']
+                # mask_boxes = data['mask_boxes']
+                
+
+                # print("BEFORE FILTERING:------------")
+                # print("img boxes len", len(img_boxes))
+                # print("mask boxes len", len(mask_boxes))
+                # print("coordinates len", len(coordinates))
+
+                # FILTER IMG_BOX to only contain selected ones
+                filtered_img_boxes = [img_box for i, img_box in enumerate(img_boxes) if i in selected_boxes_ids]
+                filtered_mask_boxes = [mask_box for i, mask_box in enumerate(mask_boxes) if i in selected_boxes_ids]
+
+
+                # print("AFTER FILTERING:------------")
+                # print("img boxes len", len(filtered_img_boxes))
+                # print("mask boxes len", len(filtered_mask_boxes))
+                # print("coordinates len", len(coordinates))
+
+
+                    # function to measure intensity and save 
+                def measure_intensity_and_save(inner_radius, mid_radius, outer_radius):
+
+                    # get intensities 
+                    inner_means, mid_means, outer_means = measure_all_blob_intensities_zones(marker, filtered_img_boxes, filtered_mask_boxes, coordinates, inner_radius, mid_radius, outer_radius)
+
+                    # Save
+                    inner_output_path = f"intensities/{repeat}/inner/{marker}_{condition}"
+                    mid_output_path = f"intensities/{repeat}/mid/{marker}_{condition}"
+                    outer_output_path = f"intensities/{repeat}/outer/{marker}_{condition}"
+                            
+
+                    inner_output_path_directory = os.path.dirname(inner_output_path)
+                    os.makedirs(inner_output_path_directory, exist_ok=True)
+
+                    mid_output_path_directory = os.path.dirname(mid_output_path)
+                    os.makedirs(mid_output_path_directory, exist_ok=True)
+
+                    outer_output_path_directory = os.path.dirname(outer_output_path)
+                    os.makedirs(outer_output_path_directory, exist_ok=True)
+
+
+                    np.save(inner_output_path, inner_means)
+                    np.save(mid_output_path, mid_means)
+                    np.save(outer_output_path, outer_means)
+                    
+                    if marker == "DAPI":
+                        print(inner_means, mid_means, outer_means)
+
+                    print("saved to:", inner_output_path, mid_output_path, outer_output_path)
+
+                # run function above
+                measure_intensity_and_save(inner_r, mid_r, outer_r)
             
-            # get info from path 
-            stripped = os.path.splitext(path)[0]
-            info = stripped.split("/")
-            repeat = info[1]
-            info_2 = info[2].split("_")
-            marker = info_2[0]
-            condition = info_2[1]
-
-            # print info obtained
-            print("repeat:", repeat)
-            print("condition:", condition)
-            print("marker:", marker)
-
-            # load blobs output path 
-            data = np.load(path, allow_pickle=True)
-
-            # Extracting img_boxes from data
-            img_boxes = data['img_boxes']
-
-            # functino to measure intensity and save 
-            def measure_intensity_and_save(level, radius):
-
-                # get intensities 
-                intensities = measure_all_blob_intensities(img_boxes, DAPI_coordinates, radius)
-
-                # Save
-                output_path = f"intensities/{repeat}/{level}/{marker}_{condition}"
-                directory = os.path.dirname(output_path)
-                os.makedirs(directory, exist_ok=True)
-                np.save(output_path, intensities)
-
-                print("saved to:", output_path)
-
-            # run function above
-            measure_intensity_and_save("outer", outer_r)
-            measure_intensity_and_save("mid", mid_r)
-            measure_intensity_and_save("inner", inner_r)
-            
-
-            
-def safe_normalize(intensities, reference):
-    """
-    Replace None with 0, convert to arrays, then divide element‐wise.
-    
-    Parameters:
-        intensities (list of floats or None)
-        reference   (list of floats or single float or None)
-    
-    Returns:
-        np.ndarray: result of intensities / reference, with None→0.
-    """
-    # If reference is a single value, broadcast it to the length of intensities
-    if not isinstance(reference, (list, tuple, np.ndarray)):
-        reference = [reference] * len(intensities)
-
-    # Replace None with 0
-    clean_i = [0.0 if v is None else v for v in intensities]
-    clean_r = [0.0 if v is None else v for v in reference]
-
-    arr_i = np.array(clean_i, dtype=float)
-    arr_r = np.array(clean_r, dtype=float)
-
-    # Perform element-wise division (wherever reference is zero, result will be inf or nan)
-    return arr_i / arr_r
-
-def donut_areas(outer_radius, mid_radius, inner_radius):
-    outer_donut_area = math.pi * (outer_radius**2 - mid_radius**2)
-    middle_donut_area = math.pi * (mid_radius**2 - inner_radius**2)
-    inner_circle_area = math.pi * (inner_radius**2)
-
-    return outer_donut_area, middle_donut_area, inner_circle_area
 
 
 
@@ -180,7 +279,7 @@ def meta_intensities_save(repeat, condition, marker, outer, mid, inner):
 
     new_row = [repeat, condition, marker, outer, mid, inner]
 
-    csv_file = 'meta_intensities.csv'
+    csv_file = 'intensities/meta_intensities.csv'
 
     # Check if file exists
     file_exists = os.path.isfile(csv_file)
@@ -194,43 +293,21 @@ def meta_intensities_save(repeat, condition, marker, outer, mid, inner):
 
         writer.writerow(new_row)
 
-def safe_subtract(intensities, reference):
-    """
-    Replace None with 0, convert to arrays, then subtract element‐wise.
-    
-    Parameters:
-        intensities (list of floats or None)
-        reference   (list of floats or single float or None)
-    
-    Returns:
-        np.ndarray: result of intensities - reference, with None→0.
-    """
-    # If reference is a single value, broadcast it to the length of intensities
-    if not isinstance(reference, (list, tuple, np.ndarray)):
-        reference = [reference] * len(intensities)
+def meta_intensities_save_individual(ID, repeat, condition, marker, outer, mid, inner):
 
-    # Replace None with 0
-    clean_i = [0.0 if v is None else v for v in intensities]
-    clean_r = [0.0 if v is None else v for v in reference]
+    new_row = [ID, marker, outer, mid, inner]
 
-    arr_i = np.array(clean_i, dtype=float)
-    arr_r = np.array(clean_r, dtype=float)
+    csv_file = f'intensities/meta_individual_{repeat}_{condition}.csv'
 
-    # Perform element-wise subtraction
-    return arr_i - arr_r
+    # Check if file exists
+    file_exists = os.path.isfile(csv_file)
 
-def load_levels(marker, current_repeat, current_condition):
-    
-    inner = f"intensities/{current_repeat}/inner/norm_{marker}_{current_condition}.npy"
-    mid = f"intensities/{current_repeat}/mid/norm_{marker}_{current_condition}.npy"
-    outer = f"intensities/{current_repeat}/outer/norm_{marker}_{current_condition}.npy"
+    with open(csv_file, 'a', newline='') as f:
+        writer = csv.writer(f)
 
-    intensity_inner = np.load(inner, allow_pickle=True)
-    intensity_mid = np.load(mid, allow_pickle=True)
-    intensity_outer = np.load(outer, allow_pickle=True)
+        # Write header only if file doesn't exist
+        if not file_exists:
+            writer.writerow(['ID', 'marker', 'outer', 'mid', 'inner'])  
 
-    inner_bin = intensity_inner
-    mid_bin = safe_subtract(intensity_mid, intensity_inner)
-    outer_bin = safe_subtract(intensity_outer, intensity_mid)
+        writer.writerow(new_row)
 
-    return inner_bin, mid_bin, outer_bin

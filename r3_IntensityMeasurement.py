@@ -2,41 +2,40 @@ from f_intensityMeasurement import *
 from f_modelDetection import *
 from f_preprocessing import *
 from f_validation import *
+from f_coordFinder import run_R2
 
 current_repeat = 1
-current_condition = 'WT'
+current_condition = "ND6"
 csv_path = 'radius.csv'
 markers = ["DAPI", "SOX2", "BRA", "GATA3"]
 levels = ["outer", "mid", "inner"]
 
 # bools to trigger what to run
-bGETAREA = False
-bGETINTENSITIES = False
-bNORMALIZE = False
-bPLOT2 = True # combined plot
+bLOAD = True
+bGETINTENSITIES = True
+bNORMALIZE = True
 
-# Load DAPI coordinates, et set outer, mid and inner radius 
-DAPI_coordinates, _, _, _, _, _ = load_DAPI()
-outer_r, mid_r, inner_r = get_radius(csv_path, current_repeat, current_condition)
-
-# get areas of each bin to normalize for plotting (is this necessary?)
-if bGETAREA:
-    outer_donut_area, middle_donut_area, inner_circle_area = donut_areas(outer_r, mid_r, inner_r)
-    print("outer area:", outer_donut_area)
-    print("middle area:", middle_donut_area)
-    print("inner area:", inner_circle_area)
-
+# GET COORDINATES AND ALL 3 RADIUS AFTER ADJUSTMENT 
+if bLOAD:
+    coordinates, outer_radius, mid_radius, inner_radius, _ = run_R2(1, "DAPI", current_condition)
 
 # get raw intensities for each marker and save it to the intensity folder 
 if bGETINTENSITIES:
     for marker in markers:
-        intensities_per_marker(marker, DAPI_coordinates, outer_r, mid_r, inner_r)
+        intensities_per_marker(current_condition, marker, coordinates, outer_radius, mid_radius, inner_radius)
 
 
 # normalize raw intensities by DAPI intensity and save 
 if bNORMALIZE:
-    for level in levels:
-        for marker in markers:
+    for marker in markers:
+        outer = 0
+        mid = 0
+        inner = 0
+        individually_normalized_outer = []
+        individually_normalized_mid = []
+        individually_normalized_inner = []
+    
+        for level in levels:
             if marker != 'DAPI': 
                 print("------------------------Now processing:")
                 print("repeat:", current_repeat)
@@ -53,43 +52,60 @@ if bNORMALIZE:
                 intensity_m = np.load(marker_path, allow_pickle=True)
                 intensity_DAPI = np.load(DAPI_path, allow_pickle=True)
 
-                # normalize intensity
-                print(f"Normalizing intensities for {marker}")
-                n_intensity = safe_normalize(intensity_m, intensity_DAPI)
 
-                # save result
-                n_intensity_path = f"intensities/{current_repeat}/{level}/norm_{marker}_{current_condition}.npy"
-                directory = os.path.dirname(n_intensity_path)
-                os.makedirs(directory, exist_ok=True)
-                np.save(n_intensity_path, n_intensity)
-                print("------------------------Results saved to:", n_intensity_path)
+                for i in range(len(intensity_m)):
+                    m = intensity_m[i]
+                    d = intensity_DAPI[i]
+
+                    # if d == 0:
+                    #     d = m
+                    
+                    print(f"{i}-----------------------")
+                    print("marker", m)
+                    print("DAPI norm", d)
+
+                    n = m/d
+
+                    print("normalized", n)
 
 
-# optional: plot
-
-    
-if bPLOT2:
-    marker_intensities = {}  # Key: marker, Value: [inner_bin, mid_bin, outer_bin]
-
-    for marker in markers:
-        if marker != 'DAPI': 
-            
-            inner_bin, mid_bin, outer_bin = load_levels(marker, current_repeat, current_condition)
-
-            marker_intensities[marker] = [inner_bin, mid_bin, outer_bin]
-
-    output = f"intensities/{current_repeat}/{current_condition}_all_markers.png"
-    plot_all_markers(marker_intensities, output, norm_by_area=False)
+                    if level == "outer":
+                        individually_normalized_outer.append(n)
+                    elif level == "mid":
+                        individually_normalized_mid.append(n)
+                    else:
+                        individually_normalized_inner.append(n)
+                   
+                    # print("-----------------------")
 
 
 
-# To do: save to csv 
-    for marker in markers:
-        if marker != 'DAPI':
-            inner_bin, mid_bin, outer_bin = load_levels(marker, current_repeat, current_condition)
+                # the average of all the models 
+                avg_intensity_m = np.nanmean(intensity_m)
+                avg_intensity_DAPI = np.nanmean(intensity_DAPI)
 
-            avg_inner = np.nanmean(inner_bin)
-            avg_mid = np.nanmean(mid_bin)
-            avg_outer = np.nanmean(outer_bin)
-            
-            meta_intensities_save(current_repeat, current_condition, marker, avg_outer, avg_mid, avg_inner)
+                # normalize (manually?)
+                if level == "outer":
+                    normalized_manually = np.nanmean(individually_normalized_outer)
+                    outer = normalized_manually
+                elif level == "mid":
+                    normalized_manually = np.nanmean(individually_normalized_mid)
+                    mid = normalized_manually
+                else:
+                    normalized_manually = np.nanmean(individually_normalized_inner)
+                    inner = normalized_manually
+
+                print("Manual mean ratio:", avg_intensity_m / avg_intensity_DAPI)
+                print("Mean of ratios:", np.nanmean(intensity_m / intensity_DAPI))
+
+
+                print(f"normalized manually for {level}:", normalized_manually)
+
+
+        print(f"saving to csv for {marker}")
+        meta_intensities_save(current_repeat, current_condition, marker, outer, mid, inner)
+
+        for i in range(1, len(individually_normalized_outer)+1):
+            meta_intensities_save_individual(i, current_repeat, current_condition, marker, individually_normalized_outer[i-1], individually_normalized_mid[i-1], individually_normalized_inner[i-1])
+
+
