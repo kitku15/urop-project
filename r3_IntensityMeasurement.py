@@ -17,7 +17,7 @@ bNORMALIZE = True
 
 # GET COORDINATES AND ALL 3 RADIUS AFTER ADJUSTMENT 
 if bLOAD:
-    coordinates, outer_radius, mid_radius, inner_radius, _ = run_R2(1, "DAPI", current_condition)
+    coordinates, outer_radius, mid_radius, inner_radius, _, _ = run_R2(1, "DAPI", current_condition)
 
 # get raw intensities for each marker and save it to the intensity folder 
 if bGETINTENSITIES:

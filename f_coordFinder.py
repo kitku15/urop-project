@@ -84,6 +84,8 @@ def get_coordinates(img_boxes, selection_csv, DAPI_coordinates, outer_radius_arr
 
     coordinates = []
     coordinates_ids = []
+    largest_region_list = []
+    binary_mask_list = []
 
     # get the selected boxes and sort the list 
     selected_boxes_ids = load_allowed_ids(selection_csv)
@@ -111,39 +113,73 @@ def get_coordinates(img_boxes, selection_csv, DAPI_coordinates, outer_radius_arr
             
             # Detect if the array is empty
             if DAPI_coordinates[counter].size == 0:
-                print(f"[WARNING] Empty coordinate at index {i+1}, using default")
+                # print(f"[WARNING] Empty coordinate at index {i+1}, using default")
                 DAPI_coordinates[counter] = default_coord
             if outer_radius_array[counter].size == 0:
-                print(f"[WARNING] Empty Radii at index {i+1}, using default")
+                # print(f"[WARNING] Empty Radii at index {i+1}, using default")
                 outer_radius_array[counter] = default_rad
-
-            # print(i+1)
-            # print(DAPI_coordinates[counter])
-            # print(DAPI_coordinates[counter][0])
-            # print(outer_radius_array[counter])
-            # print(outer_radius_array[counter][0])
-            
+        
             
             # use average outside intensity to set simple binary threshold 
             _, _, _, avg_intensity_raw = outside_intensity(img_box, DAPI_coordinates[counter][0], outer_radius_array[counter][0])
-           
-            thresh_int = 2400
-            if avg_intensity_raw > thresh_int:
-                binary_thresh = 0.25
-            else:
-                binary_thresh = 0.15
+            
+            if "WT" in selection_csv:
+                thresh_int = 2400
+                condition = "WT"
+                if avg_intensity_raw > thresh_int:
+                    binary_thresh = 0.25
+                else:
+                    binary_thresh = 0.15
+                
+            if "ND6" in selection_csv:
+                thresh_int = 1500
+                condition = "ND6"
+                if avg_intensity_raw > thresh_int:
+                    binary_thresh = 0.1
+                else:
+                    binary_thresh = 0.06
     
             counter = counter + 1
             img_box = img_as_float(img_box)
 
             # use binary mask to get centroid coordinates which are much more accurate than blob_log coordinates
             largest_region, binary_mask = get_binary_mask(img_box, 10, binary_thresh)
+
+        
+            # Find contours in binary_mask---------------------------------
+            # contours = measure.find_contours(binary_mask, level=0.05)
+
+            # # Create a side-by-side plot
+            # fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+
+            # # Left: Original image
+            # axs[0].imshow(img_box, cmap='gray')
+            # axs[0].set_title(f"Original Box {i+1}")
+            # axs[0].axis('off')
+
+            # # Right: Image with contours
+            # axs[1].imshow(img_box, cmap='gray')
+            # for contour in contours:
+            #     axs[1].plot(contour[:, 1], contour[:, 0], linewidth=2, color='red')
+            # axs[1].set_title(f"Contours for Box {counter}")
+            # axs[1].axis('off')
+
+            # # Save and close
+            # plt.tight_layout()
+            # path = f"distribution/contour_images/1_{condition}_{counter}.png"
+            # directory = os.path.dirname(path)
+            # os.makedirs(directory, exist_ok=True)
+            # plt.savefig(path, bbox_inches='tight')
+            # plt.close()
+            #----------------------------------------------------------------
            
             coordinate = largest_region.centroid
             coordinates.append(coordinate)
             coordinates_ids.append(i+1)
+            largest_region_list.append(largest_region)
+            binary_mask_list.append(binary_mask)
 
-    return coordinates, coordinates_ids, largest_region
+    return coordinates, coordinates_ids, largest_region_list, binary_mask_list
 
 
 
@@ -219,7 +255,7 @@ def run_R2(repeat, marker, condition, adjusting=False):
     DAPI_coordinates, _, _, outer_radius_array, mid_radius_array, inner_radius_array, outer_radius, mid_radius, inner_radius = load_DAPI(condition)
 
     # Refine coordinates 
-    coordinates, coordinates_ids, largest_region = get_coordinates(img_boxes, selection_csv, DAPI_coordinates, outer_radius_array)
+    coordinates, coordinates_ids, largest_region_list, binary_mask_list = get_coordinates(img_boxes, selection_csv, DAPI_coordinates, outer_radius_array)
 
     # print what we have to reconfirm, all should be the same length 
     print("coor len", len(coordinates))
@@ -249,66 +285,6 @@ def run_R2(repeat, marker, condition, adjusting=False):
         # adjust("BRA", converted_coordinates, cleaned_outer_radius_array, cleaned_mid_radius_array, cleaned_inner_radius_array)
         adjust("GATA3", condition, converted_coordinates, cleaned_outer_radius_array, cleaned_mid_radius_array, cleaned_inner_radius_array)
     
-    return converted_coordinates, outer_radius, mid_radius, inner_radius, largest_region
+    return converted_coordinates, outer_radius, mid_radius, inner_radius, largest_region_list, binary_mask_list
 
 
-
-
-
-
-
-# def circularity_filter(area, c_thresh, box_id, filter_no):
-#     '''
-#     Apply circularity filter on small image: if blob not circular enough --> filter out!
-#     '''
-#     regions, binary_mask = area
-#     circularity_pass = False
-#     circular_blobs = []
-
-#     # Filter by circularity
-#     for region in regions:
-
-#         if region.perimeter == 0: # to prevent division by zero 
-#             continue
-
-#         circularity = 4 * np.pi * region.area / (region.perimeter ** 2)
-
-#         # SIZE FILTERS 
-#         min_diameter = 50
-#         diameter = region.equivalent_diameter
-
-#         if circularity > c_thresh and min_diameter <= diameter:
-#             circular_blobs.append((region, circularity))
-
-#     # visualize dupa --------------------------
-#     fig, ax = plt.subplots()
-#     ax.imshow(binary_mask, cmap='gray')
-#     ax.set_title(f'{len(circular_blobs)} Circular Blobs Detected')
-
-#     if not circular_blobs:
-#         ax.set_title('No Circular Blobs Detected')
-#     else:
-#         ax.set_title(f'{len(circular_blobs)} Circular Blob(s) Detected')
-#         for region in circular_blobs:
-#             y, x = region.centroid
-#             diameter = region.equivalent_diameter
-#             r = diameter / 2.0
-#             # Draw the circle
-#             circle = plt.Circle((x, y), r, edgecolor='red', fill=False, linewidth=1.5)
-#             ax.add_patch(circle)
-#             # Label the diameter on the image
-#             ax.text(x, y, f'{circularity:.3f}', color='blue', fontsize=8, ha='center', va='center')
-#     plt.axis('off')
-#     plt.savefig(f'Circularity_Filter_output_{box_id}_filter{filter_no}')
-#     plt.close()
-#     # -----------------------------------------
-
-#     if circular_blobs:
-#         # Find the blob with the largest area
-#         largest_blob, best_circularity = max(circular_blobs, key=lambda x: x[0].area)
-#         if best_circularity > c_thresh:
-#             return True, best_circularity
-#         else: 
-#             return False, 0
-#     else:
-#         return False, 0

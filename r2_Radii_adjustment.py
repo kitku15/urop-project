@@ -6,7 +6,7 @@ from f_coordFinder import run_R2
 
 
 # this is for adjustment
-converted_coordinates, outer_radius, mid_radius, inner_radius, _ = run_R2(1, "DAPI", "ND6", adjusting=True)
+converted_coordinates, outer_radius, mid_radius, inner_radius, _, _ = run_R2(1, "DAPI", "ND6", adjusting=True)
 
 
 

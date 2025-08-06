@@ -27,14 +27,6 @@ def normalize_tiff(tiff):
 
     return img_norm
 
-def measure_blob_intensity_zones_R4(idx, image, center, radii):
-
-    h, w = image.shape
-    cx, cy = center[0]
-
-    yy, xx = np.ogrid[:h, :w]
-    dist_sq = (xx - cx) ** 2 + (yy - cy) ** 2
-
 
 
 def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_r, outer_r, print_info=False):
@@ -138,10 +130,10 @@ def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_
 
         print(f"Saved overlay to: {output_path}")
     
-    if marker == "GATA3":
-        os.makedirs("intensities/visualize", exist_ok=True)
-        output_path = f'intensities/visualize/1_WT_{marker}_{idx+1}.png'
-        visualize_zones(marker, image, mask, center, inner_r, mid_r, outer_r, output_path)
+    # if marker == "GATA3":
+    #     os.makedirs("intensities/visualize", exist_ok=True)
+    #     output_path = f'intensities/visualize/1_WT_{marker}_{idx+1}.png'
+    #     visualize_zones(marker, image, mask, center, inner_r, mid_r, outer_r, output_path)
 
     return mean_inner, mean_mid, mean_outer
 
