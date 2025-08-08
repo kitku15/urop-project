@@ -183,86 +183,88 @@ def get_radius(csv_path, current_repeat, current_condition):
 
 
 
-def intensities_per_marker(condition, marker, coordinates, outer_r, mid_r, inner_r):
+def intensities_per_marker(repeat, condition, marker, coordinates, outer_r, mid_r, inner_r):
 
     for path in read_paths():
-        if marker in path:
-            if condition in path:
-                # path example: blobs_npz/1/GATA3_WT.npz
-                print("------------------------Now processing:", path)
-                
-                repeat, condition, _ = get_info(path)
-
-                # get selected ids:
-                selected_boxes_ids = load_allowed_ids(f'selection/{repeat}/img_DAPI_{condition}.csv')
-                selected_boxes_ids.sort()
-                # print("box ids:", selected_boxes_ids)
-                # print("length", len(selected_boxes_ids))
-
-                # load blobs output path 
-                # data = np.load(path, allow_pickle=True)
-
-                mask_boxes_path = f"boxes_npz/{repeat}/mask_{marker}_{condition}.npz"
-                image_boxes_path = f"boxes_npz/{repeat}/img_{marker}_{condition}.npz"
-                
-                img_boxes = load_boxes(image_boxes_path)
-                mask_boxes = load_boxes(mask_boxes_path)
-
-
-                # # Extracting img_boxes from data
-                # img_boxes = data['img_boxes']
-                # mask_boxes = data['mask_boxes']
-                
-
-                # print("BEFORE FILTERING:------------")
-                # print("img boxes len", len(img_boxes))
-                # print("mask boxes len", len(mask_boxes))
-                # print("coordinates len", len(coordinates))
-
-                # FILTER IMG_BOX to only contain selected ones
-                filtered_img_boxes = [img_box for i, img_box in enumerate(img_boxes) if i in selected_boxes_ids]
-                filtered_mask_boxes = [mask_box for i, mask_box in enumerate(mask_boxes) if i in selected_boxes_ids]
-
-
-                # print("AFTER FILTERING:------------")
-                # print("img boxes len", len(filtered_img_boxes))
-                # print("mask boxes len", len(filtered_mask_boxes))
-                # print("coordinates len", len(coordinates))
-
-
-                    # function to measure intensity and save 
-                def measure_intensity_and_save(inner_radius, mid_radius, outer_radius):
-
-                    # get intensities 
-                    inner_means, mid_means, outer_means = measure_all_blob_intensities_zones(marker, filtered_img_boxes, filtered_mask_boxes, coordinates, inner_radius, mid_radius, outer_radius)
-
-                    # Save
-                    inner_output_path = f"intensities/{repeat}/inner/{marker}_{condition}"
-                    mid_output_path = f"intensities/{repeat}/mid/{marker}_{condition}"
-                    outer_output_path = f"intensities/{repeat}/outer/{marker}_{condition}"
-                            
-
-                    inner_output_path_directory = os.path.dirname(inner_output_path)
-                    os.makedirs(inner_output_path_directory, exist_ok=True)
-
-                    mid_output_path_directory = os.path.dirname(mid_output_path)
-                    os.makedirs(mid_output_path_directory, exist_ok=True)
-
-                    outer_output_path_directory = os.path.dirname(outer_output_path)
-                    os.makedirs(outer_output_path_directory, exist_ok=True)
-
-
-                    np.save(inner_output_path, inner_means)
-                    np.save(mid_output_path, mid_means)
-                    np.save(outer_output_path, outer_means)
+        parts = path.split("/")
+        if int(parts[1]) == repeat:
+            if marker in path:
+                if condition in path:
+                    # path example: blobs_npz/1/GATA3_WT.npz
+                    print("------------------------Now processing:", path)
                     
-                    if marker == "DAPI":
-                        print(inner_means, mid_means, outer_means)
+                    repeat, condition, _ = get_info(path)
 
-                    print("saved to:", inner_output_path, mid_output_path, outer_output_path)
+                    # get selected ids:
+                    selected_boxes_ids = load_allowed_ids(f'selection/{repeat}/img_DAPI_{condition}.csv')
+                    selected_boxes_ids.sort()
+                    # print("box ids:", selected_boxes_ids)
+                    # print("length", len(selected_boxes_ids))
 
-                # run function above
-                measure_intensity_and_save(inner_r, mid_r, outer_r)
+                    # load blobs output path 
+                    # data = np.load(path, allow_pickle=True)
+
+                    mask_boxes_path = f"boxes_npz/{repeat}/mask_{marker}_{condition}.npz"
+                    image_boxes_path = f"boxes_npz/{repeat}/img_{marker}_{condition}.npz"
+                    
+                    img_boxes = load_boxes(image_boxes_path)
+                    mask_boxes = load_boxes(mask_boxes_path)
+
+
+                    # # Extracting img_boxes from data
+                    # img_boxes = data['img_boxes']
+                    # mask_boxes = data['mask_boxes']
+                    
+
+                    # print("BEFORE FILTERING:------------")
+                    # print("img boxes len", len(img_boxes))
+                    # print("mask boxes len", len(mask_boxes))
+                    # print("coordinates len", len(coordinates))
+
+                    # FILTER IMG_BOX to only contain selected ones
+                    filtered_img_boxes = [img_box for i, img_box in enumerate(img_boxes) if i in selected_boxes_ids]
+                    filtered_mask_boxes = [mask_box for i, mask_box in enumerate(mask_boxes) if i in selected_boxes_ids]
+
+
+                    # print("AFTER FILTERING:------------")
+                    # print("img boxes len", len(filtered_img_boxes))
+                    # print("mask boxes len", len(filtered_mask_boxes))
+                    # print("coordinates len", len(coordinates))
+
+
+                        # function to measure intensity and save 
+                    def measure_intensity_and_save(inner_radius, mid_radius, outer_radius):
+
+                        # get intensities 
+                        inner_means, mid_means, outer_means = measure_all_blob_intensities_zones(marker, filtered_img_boxes, filtered_mask_boxes, coordinates, inner_radius, mid_radius, outer_radius)
+
+                        # Save
+                        inner_output_path = f"intensities/{repeat}/inner/{marker}_{condition}"
+                        mid_output_path = f"intensities/{repeat}/mid/{marker}_{condition}"
+                        outer_output_path = f"intensities/{repeat}/outer/{marker}_{condition}"
+                                
+
+                        inner_output_path_directory = os.path.dirname(inner_output_path)
+                        os.makedirs(inner_output_path_directory, exist_ok=True)
+
+                        mid_output_path_directory = os.path.dirname(mid_output_path)
+                        os.makedirs(mid_output_path_directory, exist_ok=True)
+
+                        outer_output_path_directory = os.path.dirname(outer_output_path)
+                        os.makedirs(outer_output_path_directory, exist_ok=True)
+
+
+                        np.save(inner_output_path, inner_means)
+                        np.save(mid_output_path, mid_means)
+                        np.save(outer_output_path, outer_means)
+                        
+                        if marker == "DAPI":
+                            print(inner_means, mid_means, outer_means)
+
+                        print("saved to:", inner_output_path, mid_output_path, outer_output_path)
+
+                    # run function above
+                    measure_intensity_and_save(inner_r, mid_r, outer_r)
             
 
 

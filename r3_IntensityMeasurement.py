@@ -4,7 +4,10 @@ from f_preprocessing import *
 from f_validation import *
 from f_coordFinder import run_R2
 
-current_repeat = 1
+start_time = time.time() 
+
+
+current_repeat = 3
 current_condition = "ND6"
 csv_path = 'radius.csv'
 markers = ["DAPI", "SOX2", "BRA", "GATA3"]
@@ -15,14 +18,19 @@ bLOAD = True
 bGETINTENSITIES = True
 bNORMALIZE = True
 
+# SET RADIUS ACCORDING TO R2
+outer_radius = 0
+mid_radius = 0
+inner_radius = 0
+
 # GET COORDINATES AND ALL 3 RADIUS AFTER ADJUSTMENT 
 if bLOAD:
-    coordinates, outer_radius, mid_radius, inner_radius, _, _ = run_R2(1, "DAPI", current_condition)
+    coordinates, outer_radius, mid_radius, inner_radius, _, _ = run_R2(current_repeat, "DAPI", outer_radius, mid_radius, inner_radius, current_condition)
 
 # get raw intensities for each marker and save it to the intensity folder 
 if bGETINTENSITIES:
     for marker in markers:
-        intensities_per_marker(current_condition, marker, coordinates, outer_radius, mid_radius, inner_radius)
+        intensities_per_marker(current_repeat, current_condition, marker, coordinates, outer_radius, mid_radius, inner_radius)
 
 
 # normalize raw intensities by DAPI intensity and save 
@@ -109,3 +117,6 @@ if bNORMALIZE:
             meta_intensities_save_individual(i, current_repeat, current_condition, marker, individually_normalized_outer[i-1], individually_normalized_mid[i-1], individually_normalized_inner[i-1])
 
 
+# END TIMER
+end_time = time.time()
+print(f"\nScript completed in {end_time - start_time:.2f} seconds.")

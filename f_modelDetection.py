@@ -136,7 +136,7 @@ def manual_selection(image_folder, output_csv):
             print("All images labeled!")
             root.quit()
             return
-        img_path = os.path.join(image_folder, image_files[current_index])
+        img_path = os.path.normpath(os.path.join(image_folder, image_files[current_index]))
         img = Image.open(img_path)
         img.thumbnail((600, 600))  # Resize for screen
         img_tk = ImageTk.PhotoImage(img)
@@ -171,7 +171,7 @@ def manual_selection(image_folder, output_csv):
 
 
 
-def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=50, exclude_border=45):
+def detect_blobs(tiff, downscale_factor=0.25, sigma=2, min_sigma=20, max_sigma=50, exclude_border=0):
     '''
     Detects blobs in a TIFF image using the Laplacian of Gaussian (LoG) method after downscaling.
 
@@ -516,15 +516,14 @@ def detect_blob_all(markers, conditions, repeat_no):
                 img_boxes = load_boxes(image_boxes_path)
                 print(f"------------------------Finished Load images boxes for repeat: {repeat}, condition: {condition}, marker: {marker}")
                 
-                
-                # B. MANUALLY REVIEW WHICH BOXES TO INCLUDE AND WHICH TO LEAVE OUT
-                print(f"------------------------Starting Manual Selection for repeat: {repeat}, condition: {condition}, marker: {marker}")
-                images_folder = f"boxes_tiff/{repeat}/img_{marker}_{condition}"
-
                 selection_output_dir = f"selection/{repeat}"
                 os.makedirs(selection_output_dir, exist_ok=True)
-
                 selection_csv = f"{selection_output_dir}/img_DAPI_{condition}.csv"
+
+
+                # # B. MANUALLY REVIEW WHICH BOXES TO INCLUDE AND WHICH TO LEAVE OUT
+                print(f"------------------------Starting Manual Selection for repeat: {repeat}, condition: {condition}, marker: {marker}")
+                images_folder = f"boxes_tiff/{repeat}/img_{marker}_{condition}"
                 manual_selection(images_folder, selection_csv)
                 print(f"------------------------Finished Manual Selection for repeat: {repeat}, condition: {condition}, marker: {marker}")
 

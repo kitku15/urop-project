@@ -26,3 +26,4 @@ import csv
 from tkinter import Tk, Button, Label
 from PIL import Image, ImageTk
 from itertools import repeat
+import matplotlib.patches as patches

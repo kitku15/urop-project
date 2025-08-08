@@ -275,7 +275,7 @@ def slider_visual(selected_boxes_ids,
 
             for t, (coords, radii) in enumerate(zip(coords_list, radii_list)):
 
-                print(coords, radii)
+                # print(coords, radii)
                 
                 if coords.ndim == 1 and coords.shape[0] == 2:
                     coords = coords[np.newaxis, :]
@@ -283,10 +283,10 @@ def slider_visual(selected_boxes_ids,
                 if radii.ndim == 0:
                     radii = np.array([radii])
 
-                if len(coords) != len(radii):
-                    print(f"!!! MISMATCH at time {t}: coords={len(coords)}, radii={len(radii)}")
-                else:
-                    print(f"OK at time {t}: coords={len(coords)}, radii={len(radii)}")
+                # if len(coords) != len(radii):
+                #     print(f"!!! MISMATCH at time {t}: coords={len(coords)}, radii={len(radii)}")
+                # else:
+                #     print(f"OK at time {t}: coords={len(coords)}, radii={len(radii)}")
 
                 if len(coords) > 0:
                     time_coords = np.column_stack((np.full(len(coords), t), coords))
@@ -299,8 +299,8 @@ def slider_visual(selected_boxes_ids,
                 all_points = np.empty((0, 3))
                 all_sizes = np.empty((0,))
 
-            print(">>> FINAL total points:", all_points.shape)
-            print(">>> FINAL total sizes:", all_sizes.shape)
+            # print(">>> FINAL total points:", all_points.shape)
+            # print(">>> FINAL total sizes:", all_sizes.shape)
 
 
             viewer.add_points(
@@ -429,20 +429,22 @@ def plot_all_markers(marker_intensities, output):
     print("Combined plot saved to:", output)
 
 
-def load_DAPI(condition, printing=True):
+def load_DAPI(repeat, condition, outer_radius, mid_radius, inner_radius, printing=True):
     # open dapi npz
     for path in read_paths():
-        if "DAPI" in path:
-            if condition in path:
-                DAPI_data = np.load(path, allow_pickle=True)
-                # get info from path 
-                stripped = os.path.splitext(path)[0]
-                info = stripped.split("/")
-                repeat = info[1]
+        parts = path.split("/")
+        if int(parts[1]) == repeat:
+            if "DAPI" in path:
+                if condition in path:
+                    DAPI_data = np.load(path, allow_pickle=True)
+                    # get info from path 
+                    stripped = os.path.splitext(path)[0]
+                    info = stripped.split("/")
+                    repeat = info[1]
 
-                info_2 = info[2].split("_")
-                marker = info_2[0]
-                condition = info_2[1]
+                    info_2 = info[2].split("_")
+                    marker = info_2[0]
+                    condition = info_2[1]
 
     # get DAPI info
     DAPI_coordinates = DAPI_data['all_coordinates']
@@ -454,11 +456,6 @@ def load_DAPI(condition, printing=True):
     max_radii = np.max(radii)
     if printing:
         print("biggest radius in DAPI list is:", max_radii)
-
-    # Define the value to fill with (once already adjusted)
-    outer_radius = 198.5618083164127
-    mid_radius = 133.5618083164127
-    inner_radius = 93.56180831641271
 
     # keep track of radius per repeat and condition 
     new_row = [repeat,condition,outer_radius,mid_radius,inner_radius]

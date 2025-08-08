@@ -8,10 +8,9 @@ start_time = time.time()
 
 # CONSTANT INFO:
 # list of markers (index according to marker where 1:DAPI, 2:SOX2, 3:BRA, 4:GATA3)
-# I currently only have mask for REPEAT 1, WT 
 markers = ["DAPI", "SOX2", "BRA", "GATA3"]
 conditions = ["ND6"]
-repeat_no = [1]
+repeat_no = [3]
 directory = "CHIP_REPEATS"
 cropping_csv_path = "cropping.csv"
 blob_output_paths = "blob_output_paths.txt"
@@ -20,7 +19,7 @@ blob_output_paths = "blob_output_paths.txt"
 bPREPROCESSING_1 = False
 bPREPROCESSING_2 = False
 bBLOB_DECETION_1 = False
-bBLOB_DECETION_2 = False
+bBLOB_DECETION_2 = True
 
 # PREPROCESSING 1: SPLIT CZI INTO TIFFS
 if bPREPROCESSING_1:
@@ -37,7 +36,7 @@ if bBLOB_DECETION_1:
 
 # BLOB DETECTION 2: BLOB DETECTION IN DAPI MASK BOX AND SAVE
 if bBLOB_DECETION_2:
-    detect_blob_all(markers=["DAPI"], conditions=["ND6"], repeat_no=[1])
+    detect_blob_all(markers=["DAPI"], conditions=["ND6"], repeat_no=[3])
 
 
 # END TIMER
