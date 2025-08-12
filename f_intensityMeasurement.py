@@ -2,6 +2,8 @@ from imports import *
 from f_coordFinder import get_info
 from f_modelDetection import load_allowed_ids, load_boxes
 from f_validation import read_paths
+from scipy.interpolate import make_interp_spline
+
 
 
 
@@ -89,14 +91,6 @@ def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_
         mean_mid = np.sum(image[mask_mid]) / area_mid if area_mid > 0 else 0
         mean_outer = np.sum(image[mask_outer]) / area_outer if area_outer > 0 else 0
 
-    
-    # if marker == "SOX2":
-    #     print("SOX2------------------")
-    #     print("inner", mean_inner)
-    #     print("mid", mean_mid)
-    #     print("outer", mean_outer)
-    
-
     def visualize_zones(marker, image, mask, center, inner_r, mid_r, outer_r, output_path):
         h, w = image.shape
         cx, cy = center[0]
@@ -158,6 +152,7 @@ def measure_all_blob_intensities_zones(marker, img_boxes, mask_boxes, coordinate
     mid_means = []
     outer_means = []
 
+
     for idx, (img, mask, center) in enumerate(zip(img_boxes, mask_boxes, coordinates)):
         inner, mid, outer = measure_blob_intensity_zones(idx, marker, img, mask, center, inner_radius, mid_radius, outer_radius)
         inner_means.append(inner)
@@ -183,97 +178,81 @@ def get_radius(csv_path, current_repeat, current_condition):
 
 
 
-def intensities_per_marker(repeat, condition, marker, coordinates, outer_r, mid_r, inner_r):
+def intensities_per_marker(directory, repeats, conditions, markers, adjusting_values):
 
-    for path in read_paths():
-        parts = path.split("/")
-        if int(parts[1]) == repeat:
-            if marker in path:
-                if condition in path:
-                    # path example: blobs_npz/1/GATA3_WT.npz
-                    print("------------------------Now processing:", path)
+    outer_r = adjusting_values["DAPI"]
+    mid_r = adjusting_values["BRA"]
+    inner_r = adjusting_values["SOX2"]
                     
-                    repeat, condition, _ = get_info(path)
+    for repeat in repeats:
+        for condition in conditions:
+            # Load coordinates 
+            coor_output_dir = f"{directory}/{repeat}/coordinates"
+            coordinates_path = f"{coor_output_dir}/{condition}.npz"
 
-                    # get selected ids:
-                    selected_boxes_ids = load_allowed_ids(f'selection/{repeat}/img_DAPI_{condition}.csv')
-                    selected_boxes_ids.sort()
-                    # print("box ids:", selected_boxes_ids)
-                    # print("length", len(selected_boxes_ids))
+            data = np.load(coordinates_path)
+            coordinates = data["coords"]
 
-                    # load blobs output path 
-                    # data = np.load(path, allow_pickle=True)
-
-                    mask_boxes_path = f"boxes_npz/{repeat}/mask_{marker}_{condition}.npz"
-                    image_boxes_path = f"boxes_npz/{repeat}/img_{marker}_{condition}.npz"
+            for marker in markers:
+                print(f"------------Repeat: {repeat}, Condition: {condition}, marker: {marker}")
                     
-                    img_boxes = load_boxes(image_boxes_path)
-                    mask_boxes = load_boxes(mask_boxes_path)
+                # get selected ids:
+                selected_boxes_ids = load_allowed_ids(f'{directory}/{repeat}/selection/img_DAPI_{condition}.csv')
+                selected_boxes_ids.sort()
 
-
-                    # # Extracting img_boxes from data
-                    # img_boxes = data['img_boxes']
-                    # mask_boxes = data['mask_boxes']
+                mask_boxes_path = f"{directory}/{repeat}/boxes_npz/mask_{marker}_{condition}.npz"
+                image_boxes_path = f"{directory}/{repeat}/boxes_npz/img_{marker}_{condition}.npz"
                     
+                img_boxes = load_boxes(image_boxes_path)
+                mask_boxes = load_boxes(mask_boxes_path)
 
-                    # print("BEFORE FILTERING:------------")
-                    # print("img boxes len", len(img_boxes))
-                    # print("mask boxes len", len(mask_boxes))
-                    # print("coordinates len", len(coordinates))
-
-                    # FILTER IMG_BOX to only contain selected ones
-                    filtered_img_boxes = [img_box for i, img_box in enumerate(img_boxes) if i in selected_boxes_ids]
-                    filtered_mask_boxes = [mask_box for i, mask_box in enumerate(mask_boxes) if i in selected_boxes_ids]
+                # FILTER IMG_BOX to only contain selected ones
+                filtered_img_boxes = [img_box for i, img_box in enumerate(img_boxes) if i in selected_boxes_ids]
+                filtered_mask_boxes = [mask_box for i, mask_box in enumerate(mask_boxes) if i in selected_boxes_ids]
 
 
-                    # print("AFTER FILTERING:------------")
-                    # print("img boxes len", len(filtered_img_boxes))
-                    # print("mask boxes len", len(filtered_mask_boxes))
-                    # print("coordinates len", len(coordinates))
+                # function to measure intensity and save 
+                def measure_intensity_and_save(inner_radius, mid_radius, outer_radius):
 
+                    # get intensities 
+                    inner_means, mid_means, outer_means = measure_all_blob_intensities_zones(marker, filtered_img_boxes, filtered_mask_boxes, coordinates, inner_radius, mid_radius, outer_radius)
 
-                        # function to measure intensity and save 
-                    def measure_intensity_and_save(inner_radius, mid_radius, outer_radius):
-
-                        # get intensities 
-                        inner_means, mid_means, outer_means = measure_all_blob_intensities_zones(marker, filtered_img_boxes, filtered_mask_boxes, coordinates, inner_radius, mid_radius, outer_radius)
-
-                        # Save
-                        inner_output_path = f"intensities/{repeat}/inner/{marker}_{condition}"
-                        mid_output_path = f"intensities/{repeat}/mid/{marker}_{condition}"
-                        outer_output_path = f"intensities/{repeat}/outer/{marker}_{condition}"
+                    # Save
+                    inner_output_path = f"{directory}/{repeat}/intensities/inner/{marker}_{condition}"
+                    mid_output_path = f"{directory}/{repeat}/intensities/mid/{marker}_{condition}"
+                    outer_output_path = f"{directory}/{repeat}/intensities/outer/{marker}_{condition}"
                                 
 
-                        inner_output_path_directory = os.path.dirname(inner_output_path)
-                        os.makedirs(inner_output_path_directory, exist_ok=True)
+                    inner_output_path_directory = os.path.dirname(inner_output_path)
+                    os.makedirs(inner_output_path_directory, exist_ok=True)
 
-                        mid_output_path_directory = os.path.dirname(mid_output_path)
-                        os.makedirs(mid_output_path_directory, exist_ok=True)
+                    mid_output_path_directory = os.path.dirname(mid_output_path)
+                    os.makedirs(mid_output_path_directory, exist_ok=True)
 
-                        outer_output_path_directory = os.path.dirname(outer_output_path)
-                        os.makedirs(outer_output_path_directory, exist_ok=True)
+                    outer_output_path_directory = os.path.dirname(outer_output_path)
+                    os.makedirs(outer_output_path_directory, exist_ok=True)
 
 
-                        np.save(inner_output_path, inner_means)
-                        np.save(mid_output_path, mid_means)
-                        np.save(outer_output_path, outer_means)
+                    np.save(inner_output_path, inner_means)
+                    np.save(mid_output_path, mid_means)
+                    np.save(outer_output_path, outer_means)
                         
-                        if marker == "DAPI":
-                            print(inner_means, mid_means, outer_means)
+                    # if marker == "DAPI": dupa
+                    #     print(inner_means, mid_means, outer_means)
 
-                        print("saved to:", inner_output_path, mid_output_path, outer_output_path)
+                    print("saved to:", inner_output_path, mid_output_path, outer_output_path)
 
-                    # run function above
-                    measure_intensity_and_save(inner_r, mid_r, outer_r)
+                # run function above
+                measure_intensity_and_save(inner_r, mid_r, outer_r)
             
 
 
 
-def meta_intensities_save(repeat, condition, marker, outer, mid, inner):
+def meta_intensities_save(directory, repeat, condition, marker, outer, mid, inner):
 
     new_row = [repeat, condition, marker, outer, mid, inner]
 
-    csv_file = 'intensities/meta_intensities.csv'
+    csv_file = f'{directory}/meta_intensities.csv'
 
     # Check if file exists
     file_exists = os.path.isfile(csv_file)
@@ -287,11 +266,11 @@ def meta_intensities_save(repeat, condition, marker, outer, mid, inner):
 
         writer.writerow(new_row)
 
-def meta_intensities_save_individual(ID, repeat, condition, marker, outer, mid, inner):
+def meta_intensities_save_individual(directory, ID, repeat, condition, marker, outer, mid, inner):
 
     new_row = [ID, marker, outer, mid, inner]
 
-    csv_file = f'intensities/meta_individual_{repeat}_{condition}.csv'
+    csv_file = f'{directory}/{repeat}/intensities/meta_individual_{condition}.csv'
 
     # Check if file exists
     file_exists = os.path.isfile(csv_file)
@@ -304,4 +283,240 @@ def meta_intensities_save_individual(ID, repeat, condition, marker, outer, mid, 
             writer.writerow(['ID', 'marker', 'outer', 'mid', 'inner'])  
 
         writer.writerow(new_row)
+
+
+def normalize_markers(directory, repeats, conditions, markers):
+    levels = ["outer", "mid", "inner"]
+
+    for repeat in repeats:
+        for condition in conditions:
+            for marker in markers:
+                outer = 0
+                mid = 0
+                inner = 0
+                individually_normalized_outer = []
+                individually_normalized_mid = []
+                individually_normalized_inner = []
+            
+                for level in levels:
+                    if marker != 'DAPI': 
+                        print("------------------------Now processing:")
+                        print("repeat:", repeat)
+                        print("condition:", repeat)
+                        print("level:", level)
+                        print("marker:", marker)
+
+                        # get paths
+                        marker_path = f"{directory}/{repeat}/intensities/{level}/{marker}_{condition}.npy"
+                        DAPI_path = f"{directory}/{repeat}/intensities/{level}/DAPI_{condition}.npy"
+
+                        # load intensities 
+                        print(f"loading intensities for {marker} and DAPI")
+                        intensity_m = np.load(marker_path, allow_pickle=True)
+                        intensity_DAPI = np.load(DAPI_path, allow_pickle=True)
+
+
+                        for i in range(len(intensity_m)):
+                            m = intensity_m[i]
+                            d = intensity_DAPI[i]
+                            
+                            print(f"{i}-----------------------")
+                            print("marker", m)
+                            print("DAPI norm", d)
+
+                            n = m/d
+
+                            print("normalized", n)
+
+                            if level == "outer":
+                                individually_normalized_outer.append(n)
+                            elif level == "mid":
+                                individually_normalized_mid.append(n)
+                            else:
+                                individually_normalized_inner.append(n)
+                        
+
+                        # normalize 
+                        if level == "outer":
+                            normalized_manually = np.nanmean(individually_normalized_outer)
+                            outer = normalized_manually
+                        elif level == "mid":
+                            normalized_manually = np.nanmean(individually_normalized_mid)
+                            mid = normalized_manually
+                        else:
+                            normalized_manually = np.nanmean(individually_normalized_inner)
+                            inner = normalized_manually
+
+
+                        print(f"normalized manually for {level}:", normalized_manually)
+
+
+                print(f"saving to csv for {marker}")
+                meta_intensities_save(directory, repeat, condition, marker, outer, mid, inner)
+
+                for i in range(1, len(individually_normalized_outer)+1):
+                    meta_intensities_save_individual(directory, i, repeat, condition, marker, individually_normalized_outer[i-1], individually_normalized_mid[i-1], individually_normalized_inner[i-1])
+
+
+def bar_plot(csv_path, repeat, plot_type='line', save_dir='plots'):
+    df = pd.read_csv(csv_path)
+
+    # Remove DAPI
+    df = df[df['marker'].str.upper() != 'DAPI']
+
+    # Focus on specified repeat
+    df = df[df['repeat'] == repeat]
+
+    # Unique (repeat, condition) pairs
+    groups = df.groupby(['repeat', 'condition'])
+
+    # Regions
+    regions = ['inner', 'mid', 'outer']
+    x = np.arange(len(regions))
+
+    # Define marker colors
+    marker_colors = {
+        'SOX2': '#00bcd4',
+        'BRA': '#ffeb3b',
+        'GATA3': '#9c27b0',
+    }
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    for (repeat, condition), group in groups:
+        fig, ax = plt.subplots(figsize=(6,5))
+
+        markers = group['marker'].tolist()
+        n_markers = len(markers)
+        bar_width = 0.25  # wider bars
+
+        # For line plot smoothing
+        x_smooth = np.linspace(x.min(), x.max(), 300)
+
+        for i, (_, row) in enumerate(group.iterrows()):
+            marker = row['marker']
+            color = marker_colors.get(marker, 'gray')
+            y = row[regions].values.astype(float)
+
+            if plot_type == 'line':
+                spline = make_interp_spline(x, y, k=2)
+                y_smooth = spline(x_smooth)
+                ax.plot(x_smooth, y_smooth, label=marker, color=color, linewidth=2)
+                ax.scatter(x, y, color=color, edgecolor='k', zorder=5)
+
+            elif plot_type == 'bar':
+                # Shift bars by i * bar_width
+                ax.bar(x + i * bar_width, y, width=bar_width, label=marker, color=color, edgecolor='black')
+
+        if plot_type == 'bar':
+            # Center x-ticks under group of bars
+            ax.set_xticks(x + bar_width * (n_markers - 1) / 2)
+        else:
+            ax.set_xticks(x)
+
+        ax.set_xticklabels([r.capitalize() for r in regions])
+        ax.set_ylabel('Average Normalized Intensity')
+        ax.set_xlabel('Region')
+        ax.set_title(f'Marker Intensities - Repeat {repeat}, Condition {condition}')
+        ax.legend(title='Marker')
+        plt.tight_layout()
+        plt.ylim(0, 1)
+
+        output_path = os.path.join(save_dir, f'intensities_plot_{condition}.png')
+        plt.savefig(output_path)
+        plt.close()
+        print(f"Saved: {output_path}")
+
+
+
+
+def plot_marker_condition_overlap(csv_path, repeat, marker, save_dir='plots'):
+    df = pd.read_csv(csv_path)
+
+    # Remove DAPI
+    df = df[df['marker'].str.upper() != 'DAPI']
+    
+    # Focus only on specified marker
+    df = df[df['marker'].str.upper() == marker.upper()]
+
+    # Focus on specified repeat
+    df = df[df['repeat'] == repeat]
+    
+    if df.empty or len(df['condition'].unique()) < 2:
+        print(f"Not enough data for marker '{marker}' with both conditions.")
+        return
+
+    regions = ['inner', 'mid', 'outer']
+    x = np.arange(len(regions))
+    x_smooth = np.linspace(x.min(), x.max(), 300)
+
+    # Set colors
+    condition_colors = {
+        'WT': "#00da1d",
+        'ND6': "#ff320e"
+    }
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Get average intensity per region for each condition
+    avg_df = df.groupby('condition')[regions].mean()
+
+    fig, ax = plt.subplots(figsize=(6,5))
+
+    curves = {}
+    for condition in ['WT', 'ND6']:
+        if condition not in avg_df.index:
+            continue
+
+        y = avg_df.loc[condition].values.astype(float)
+        spline = make_interp_spline(x, y, k=2)
+        y_smooth = spline(x_smooth)
+        curves[condition] = y_smooth
+
+        ax.plot(x_smooth, y_smooth, label=condition, color=condition_colors[condition], linewidth=2)
+        ax.scatter(x, y, color=condition_colors[condition], edgecolor='k', zorder=5)
+
+    # Highlight overlap region
+    y_min = np.minimum(curves['WT'], curves['ND6'])
+    y_max = np.maximum(curves['WT'], curves['ND6'])
+
+    ax.fill_between(x_smooth, y_min, where=(curves['WT'] > 0) & (curves['ND6'] > 0), 
+                    interpolate=True, color="#ff8f0e", alpha=0.3, label='Overlap')
+
+    # AUCs
+    auc_wt = np.trapz(curves['WT'], x_smooth)
+    auc_nd6 = np.trapz(curves['ND6'], x_smooth)
+    auc_overlap = np.trapz(y_min, x_smooth)
+    total_auc = auc_wt + auc_nd6
+
+    overlap_percentage = 100 * (2 * auc_overlap) / total_auc
+    overlap_text = f"Overlap: {overlap_percentage:.2f}%"
+
+    # Add text to plot
+    ax.text(0.95, 0.05, overlap_text,
+            horizontalalignment='right',
+            verticalalignment='bottom',
+            transform=ax.transAxes,
+            fontsize=10,
+            bbox=dict(facecolor='white', alpha=0.7, edgecolor='gray'))
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([r.capitalize() for r in regions])
+    ax.set_ylabel('Average Normalized Intensity')
+    ax.set_xlabel('Region')
+    ax.set_title(f'{marker.upper()} Intensities (WT vs ND6)')
+    ax.legend()
+    plt.tight_layout()
+    plt.ylim(0, 1)
+
+    output_path = os.path.join(save_dir, f'overlap_plot_{marker.upper()}.png')
+    plt.savefig(output_path)
+    plt.close()
+
+    print(f"Saved plot: {output_path}")
+    print(f"AUC WT: {auc_wt:.3f}")
+    print(f"AUC ND6: {auc_nd6:.3f}")
+    print(f"Overlap AUC: {auc_overlap:.3f}")
+    print(f"Overlap %: {overlap_percentage:.2f}%")
+
 

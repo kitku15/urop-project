@@ -1,8 +1,8 @@
 from imports import *
-from skimage import io, color, measure, exposure, img_as_ubyte
+from skimage import io, color, measure, exposure
 import seaborn as sns
 from f_modelDetection import load_boxes, load_allowed_ids
-from f_validation import load_DAPI, read_paths, slider_visual
+from f_validation import load_DAPI
 
 def outside_intensity(image, coordinates_rescaled, radii_rescaled):
     '''
@@ -57,11 +57,7 @@ def outside_intensity(image, coordinates_rescaled, radii_rescaled):
 
     return avg_intensity, total_intensity, normalized, avg_intensity_raw
 
-def get_binary_mask(area, sigma, blurred_thresh):
-    '''
-    preprocessing for regions props 
-    
-    '''
+def get_binary_mask(area, sigma):
 
     # If RGBA, drop alpha and convert to grayscale
     if area.ndim == 3 and area.shape[2] == 4:
@@ -74,17 +70,165 @@ def get_binary_mask(area, sigma, blurred_thresh):
     # Apply Gaussian blur
     blurred = gaussian(normalized, sigma=sigma)
 
+    def regions_touch_border(binary_mask):
+        '''
+        function that, for a threshold, generates binary mask and finds regions touching border.
+
+        '''
+        labeled = measure.label(binary_mask)
+        regions = measure.regionprops(labeled)
+        height, width = binary_mask.shape
+
+        if not regions:
+            return False  # no regions at all
+        
+        # Find largest region by area
+        largest_region = max(regions, key=lambda r: r.area)
+        minr, minc, maxr, maxc = largest_region.bbox
+        
+        height, width = binary_mask.shape
+        # Check if bounding box touches border
+        if minr == 0 or minc == 0 or maxr == height or maxc == width:
+            return True
+        return False
+
+    def find_best_slope_tol(image, slope_tol_range, sigma=2, spike_fraction=0.2):
+        '''
+        Iterate over a range of slope_tol, find threshold, make binary mask, test border touching
+        '''
+        best_slope_tol = None
+        best_threshold = None
+        
+        # Normalize image as in your processing
+        min_intensity = image.min()
+        max_intensity = image.max()
+        norm_image = (image - min_intensity) / (max_intensity - min_intensity)
+        blurred = gaussian(norm_image, sigma=sigma)
+        
+        for slope_tol in slope_tol_range:
+            threshold = find_curve_base_threshold(image, slope_tol=slope_tol, spike_fraction=spike_fraction)
+            
+            binary_mask = blurred > threshold
+            if not regions_touch_border(binary_mask):
+                best_slope_tol = slope_tol
+                best_threshold = threshold
+            else:
+                # regions touch border - slope_tol too big probably, skip
+                pass
+        
+        if best_slope_tol is None:
+            # print("No slope_tol found without border-touching regions")
+            # fallback - smallest slope_tol's threshold
+            best_threshold = find_curve_base_threshold(image, slope_tol=slope_tol_range[0], spike_fraction=spike_fraction)
+        
+        return best_slope_tol, best_threshold
+    
+    def find_curve_base_threshold(image, slope_tol, spike_fraction=0.2):
+        
+        smooth_sigma = 2
+        min_intensity = image.min()
+
+        hist, bin_edges = np.histogram(image.ravel(), bins=400, range=(min_intensity, 1))
+        
+        hist_smooth = gaussian_filter1d(hist.astype(float), sigma=smooth_sigma)
+        deriv = np.gradient(hist_smooth)
+
+
+        max_count = hist_smooth.max()
+
+        # Find index where histogram falls below a fraction of the max count
+        spike_end_idx = 0
+        for i, count in enumerate(hist_smooth):
+            if count < max_count * spike_fraction:
+                spike_end_idx = i
+                break
+        
+        # Start searching after the spike ends
+        start_idx = spike_end_idx if spike_end_idx > 0 else 10
+
+
+        for idx in range(start_idx, len(deriv)):
+            # Find first index where slope magnitude is below tolerance (flattening)
+            if abs(deriv[idx]) < slope_tol:
+                return bin_edges[idx]
+        
+        # Fallback if no flattening found
+        # print("no flattening found")
+        return 0.1
+    
+    def multi_stage_slope_tol_search(image, sigma, spike_fraction):
+
+        max_slope = 500
+
+        # Stage 0: Wide search with big steps (50)---------------------------------------------
+        stage0_vals = np.arange(1, max_slope+1, 50)
+        best_slope, best_thresh = find_best_slope_tol(image, stage0_vals, sigma=sigma, spike_fraction=spike_fraction)
+        
+        if best_slope is None:
+            # print("No suitable slope_tol found in stage 1, falling back to default threshold")
+            return 10, 0.2  # or any reasonable default slope_tol and threshold
+
+        # Stage 1: Wide search with big steps (5)---------------------------------------------
+        low = max(1, best_slope - 50)
+        high = min(max_slope, best_slope + 50)
+        stage1_vals = np.arange(low, high + 5, 5)
+        best_slope, best_thresh = find_best_slope_tol(image, stage1_vals, sigma=sigma, spike_fraction=spike_fraction)
+        
+        if best_slope is None:
+            # print("No suitable slope_tol found in stage 1, falling back to default threshold")
+            return 10, 0.2  # or any reasonable default slope_tol and threshold
+        
+        # Stage 2: Narrow search +/- 5 around best from stage 1, steps of 1-------------------
+        low = max(1, best_slope - 5)
+        high = min(max_slope, best_slope + 5)
+        stage2_vals = np.arange(low, high + 1, 1)
+
+        best_slope, best_thresh = find_best_slope_tol(image, stage2_vals, sigma=sigma, spike_fraction=spike_fraction)
+        
+        if best_slope is None:
+            # print("No suitable slope_tol found in stage 2, falling back to default threshold")
+            return 10, 0.2
+        
+        # Stage 3: Narrow search +/- 1 around best from stage 2, steps of 0.2----------------------
+        low = max(1, best_slope - 1)
+        high = min(max_slope, best_slope + 1)
+        stage3_vals = np.arange(low, high + 0.2, 0.2)
+        best_slope, best_thresh = find_best_slope_tol(image, stage3_vals, sigma=sigma, spike_fraction=spike_fraction)
+        
+        if best_slope is None:
+            # print("No suitable slope_tol found in stage 3, falling back to default threshold")
+            return 10, 0.2
+        
+        # Stage 4: Narrow search +/- 0.5 around best from stage 2, steps of 0.05----------------------
+        low = max(1, best_slope - 0.5)
+        high = min(max_slope, best_slope + 0.5)
+        stage4_vals = np.arange(low, high + 0.05, 0.05)
+        best_slope, best_thresh = find_best_slope_tol(image, stage4_vals, sigma=sigma, spike_fraction=spike_fraction)
+        
+        if best_slope is None:
+            # print("No suitable slope_tol found in stage 4, falling back to default threshold")
+            return 10, 0.2
+        
+        return best_slope, best_thresh
+
+    # get the best slope tol value (maximum with no regions touching border)
+    best_slope, binary_thresh = multi_stage_slope_tol_search(blurred, sigma=2, spike_fraction=0.3)
+
+
+    # print(f"Best slope_tol: {best_slope:.3f}, threshold: {binary_thresh:.3f}")
+
+
     # Convert to binary mask
-    binary_mask = blurred > blurred_thresh # can adjust
+    binary_mask = blurred > binary_thresh # can adjust
 
     labeled = measure.label(binary_mask) # Label connected components
     regions = measure.regionprops(labeled) # Measure properties
     largest_region = max(regions, key=lambda r: r.area)
 
-    return largest_region, binary_mask
+    return largest_region, binary_mask, blurred, binary_thresh
 
 
-def get_coordinates(img_boxes, selection_csv, DAPI_coordinates, outer_radius_array):
+def get_coordinates(img_boxes, selection_csv):
 
     coordinates = []
     coordinates_ids = []
@@ -95,114 +239,30 @@ def get_coordinates(img_boxes, selection_csv, DAPI_coordinates, outer_radius_arr
     selected_boxes_ids = load_allowed_ids(selection_csv)
     selected_boxes_ids.sort()
 
-    # print(len(img_boxes))
-    # print(len(selected_boxes_ids))
-    # print(len(DAPI_coordinates))
-    # print(DAPI_coordinates)
-    # print(len(outer_radius_array))
-
-    # print(DAPI_coordinates)
-    # print(selected_boxes_ids)
-
-    default_coord = np.array([[212., 268.]])
-    default_rad = np.array([100])
-
-
     # Get coordinates 
-    counter = 0
     print("Making Binary masks----------------------")
-    for i, img_box in enumerate(img_boxes):
-        if i+1 in selected_boxes_ids:
-            
-            # Detect if the array is empty
-            if DAPI_coordinates[counter].size == 0:
-                # print(f"[WARNING] Empty coordinate at index {i+1}, using default")
-                DAPI_coordinates[counter] = default_coord
-            if outer_radius_array[counter].size == 0:
-                # print(f"[WARNING] Empty Radii at index {i+1}, using default")
-                outer_radius_array[counter] = default_rad
-        
-            
-            # use average outside intensity to set simple binary threshold 
-            _, _, _, avg_intensity_raw = outside_intensity(img_box, DAPI_coordinates[counter][0], outer_radius_array[counter][0])
-            
+    # Filter only selected boxes for processing
+    box_args = [(i, img_box) for i, img_box in enumerate(img_boxes) if i+1 in selected_boxes_ids]
 
-            # FOR REPEAT 1--------------------------------------
-            if "WT" in selection_csv and "1" in selection_csv:
-                thresh_int = 2400
-                condition = "WT"
-                if avg_intensity_raw > thresh_int:
-                    binary_thresh = 0.25
-                else:
-                    binary_thresh = 0.15
-                    
-            if "ND6" in selection_csv and "1" in selection_csv:
-                thresh_int = 1500
-                condition = "ND6"
-                if avg_intensity_raw > thresh_int:
-                    binary_thresh = 0.1
-                else:
-                    binary_thresh = 0.06
-            # --------------------------------------------------------
-            # FOR REPEAT 3-------------------------------------------
-            if "WT" in selection_csv and "3" in selection_csv:
-                binary_thresh = 0.3
-                condition = "WT"
-            if "ND6" in selection_csv and "3" in selection_csv:
-                binary_thresh = 0.3
-                condition = "ND6"
-            #---------------------------------------------------------
-            counter = counter + 1
-            img_box = img_as_float(img_box)
+    with ThreadPoolExecutor() as executor:
+        results = list(executor.map(process_binarymask, box_args))  # preserves original order of box_args
 
-            # use binary mask to get centroid coordinates which are much more accurate than blob_log coordinates
-            largest_region, binary_mask = get_binary_mask(img_box, 10, binary_thresh)
-
-        
-            #Visualize binary mask ---------------------------------
-            # fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-
-            # # Show original image (img_box)
-            # axes[0].imshow(img_box, cmap='gray')
-            # axes[0].set_title('Original Image')
-
-            # # Mark centroid
-            # cy, cx = largest_region.centroid  # centroid is (row, col) = (y, x)
-            # axes[0].scatter(cx, cy, s=50, edgecolor='red', facecolor='none', linewidth=2, label='Centroid')
-
-            # # Draw circle of radius 90 around centroid (outline only)
-            # circle = patches.Circle((cx, cy), radius=100, edgecolor='yellow', facecolor='none', linewidth=2)
-            # axes[0].add_patch(circle)
-
-            # axes[0].axis('off')
-            # axes[0].legend(loc='upper right')
-
-            # # Show binary mask (mask is boolean, convert to int for visualization)
-            # axes[1].imshow(binary_mask, cmap='gray')
-            # axes[1].set_title('Binary Mask')
-            # axes[1].axis('off')
-
-            # # Make output directory if it doesn't exist
-            # output_dir = 'R2_binarymasks'
-            # os.makedirs(output_dir, exist_ok=True)
-
-            # # Save figure with a meaningful name (e.g., box index)
-            # filename = f'R3_{condition}_{i+1}.png'
-            # filepath = os.path.join(output_dir, filename)
-            # plt.savefig(filepath, bbox_inches='tight')
-            # plt.close(fig)  # Close the figure to save memory
-            # print(f"saved {i+1}, outside intensity: {avg_intensity_raw}")
-
-            #----------------------------------------------------------------
-           
-            coordinate = largest_region.centroid
-            coordinates.append(coordinate)
-            coordinates_ids.append(i+1)
-            largest_region_list.append(largest_region)
-            binary_mask_list.append(binary_mask)
+    # Now unpack results in order
+    for idx, coordinate, largest_region, binary_mask in results:
+        coordinates.append(coordinate)
+        coordinates_ids.append(idx)
+        largest_region_list.append(largest_region)
+        binary_mask_list.append(binary_mask)
 
     print("Saved all Binary masks----------------------")
     return coordinates, coordinates_ids, largest_region_list, binary_mask_list
+
+def process_binarymask(args):
+    i, img_box = args
+    img_box = img_as_float(img_box)
+    largest_region, binary_mask, _, _ = get_binary_mask(img_box, 10)
+    coordinate = largest_region.centroid
+    return (i+1, coordinate, largest_region, binary_mask)
 
 
 
@@ -223,149 +283,201 @@ def get_info(path):
         
     return repeat, condition, marker
 
-
-
-def adjust_napari(repeat, marker, condition, coordinates, outer_radius_array, mid_radius_array, inner_radius_array):
-    for path in read_paths():
-        parts = path.split("/")
-        if int(parts[1]) == repeat:
-            if marker in path:
-                if condition in path:
-                    # path example: blobs_npz/1/GATA3_WT.npz
-                    print("------------------------Now processing:", path)
-                
-
-                    mask_boxes_path = f"boxes_npz/{repeat}/mask_{marker}_{condition}.npz"
-                    image_boxes_path = f"boxes_npz/{repeat}/img_{marker}_{condition}.npz"
-                    
-                    img_boxes = load_boxes(image_boxes_path)
-                    mask_boxes = load_boxes(mask_boxes_path)
-
-                    # get selected ids:
-                    selected_boxes_ids = load_allowed_ids(f'selection/{repeat}/img_DAPI_{condition}.csv')
-                    selected_boxes_ids.sort()
-                    print("box ids:", selected_boxes_ids)
-                    print("length", len(selected_boxes_ids))
-
-                    # open slider visual to visualize it
-                    print(f"opening slider visual to adjust for {marker}...")
-                    slider_visual(selected_boxes_ids,
-                            img_boxes_list=[img_boxes],
-                            mask_boxes_list=[mask_boxes],
-                            all_coordinates_list=[coordinates],  
-                            outer_radius_list=[outer_radius_array],
-                            mid_radius_list=[mid_radius_array],
-                            inner_radius_list=[inner_radius_array],
-                            labels=[f"{marker}"],
-                            print_info=False
-                        )
-
-def run_R2(repeat, marker, condition, outer_radius, mid_radius, inner_radius, adjusting=False):
-
-    # LOADING ---------------------------------------------------------------------------------------------
-    # image boxes
-    image_boxes_path = f"boxes_npz/{repeat}/img_{marker}_{condition}.npz"
-    img_boxes = load_boxes(image_boxes_path)
-
-    # selected boxes csv 
-    selection_output_dir = f"selection/{repeat}"
-    selection_csv = f"{selection_output_dir}/img_DAPI_{condition}.csv"
-    # get selected ids:
-    selected_boxes_ids = load_allowed_ids(selection_csv)
-    selected_boxes_ids.sort()
-
-    # -----------------------------------------------------------------------------------------------------
-
-
-    # STEPS TO GET REFINED COORDINATES-----------------------------------------------------------------------
-    # Get Raw Coordinates and Radius from DAPI model detection
-    DAPI_coordinates, _, _, outer_radius_array, mid_radius_array, inner_radius_array, _, _, _ = load_DAPI(repeat, condition, outer_radius, mid_radius, inner_radius)
-
-    # Refine coordinates 
-    coordinates, coordinates_ids, largest_region_list, binary_mask_list = get_coordinates(img_boxes, selection_csv, DAPI_coordinates, outer_radius_array)
-
-    # print what we have to reconfirm, all should be the same length 
-    print("coor len", len(coordinates))
-    print("coor id len", len(coordinates_ids))
-    print("DAPI coor len", len(DAPI_coordinates))
-    print("radius array len", len(outer_radius_array))
-    # -------------------------------------------------------------------------------------------------------
-
-
-    # FIX EMPTY ARRAYS BY REFILLING (IDK WHY THIS HAPPENS)----------------------------------------------------
-    outer_fill_value = np.array([outer_radius])
-    mid_fill_value = np.array([mid_radius])
-    inner_fill_value = np.array([inner_radius])
-
-    # Replace empty arrays 
-    cleaned_outer_radius_array = [x if x.size != 0 else outer_fill_value for x in outer_radius_array]
-    cleaned_mid_radius_array = [x if x.size != 0 else mid_fill_value for x in mid_radius_array]
-    cleaned_inner_radius_array = [x if x.size != 0 else inner_fill_value for x in inner_radius_array]
-    # --------------------------------------------------------------------------------------------------------
-
-    # convert coordinates (in tuple format) into numpy array format
-    converted_coordinates = [np.array([[float(y), float(x)]]) for x, y in coordinates]
-
-
-    def adjust(marker_adjusting, test_radius):
-
-        marker_boxes_path = f"boxes_npz/{repeat}/img_{marker_adjusting}_{condition}.npz"
-        marker_boxes = load_boxes(marker_boxes_path)
-
-        print(len(marker_boxes))
-        print(len(largest_region_list))
-
-
-        # Get coordinates 
-        counter = 0
-        for i, marker_box in enumerate(marker_boxes):
-            if i+1 in selected_boxes_ids:
-
-                region = largest_region_list[counter]
-                
-                marker_box = img_as_float(marker_box)
+def adjust_binaryMask(directory, repeats, conditions):
+    '''
+    Adjust for Binary mask threshold based on DAPI. This is a pain but we have to do it until I find a better alternative
+    '''
             
-                # Visualize binary mask ---------------------------------
-                fig, ax = plt.subplots(figsize=(8, 4))
+    for repeat in repeats:
+        for condition in conditions:
+                
+            image_boxes_path = f"{directory}/{repeat}/boxes_npz/img_DAPI_{condition}.npz"
+            img_boxes = load_boxes(image_boxes_path)
 
-                # Use ax[0] for the original image and annotations
-                ax.imshow(marker_box, cmap='gray')
-                ax.set_title(f"{marker_adjusting}_{test_radius}")
-
-                cy, cx = region.centroid
-                ax.scatter(cx, cy, s=50, edgecolors='red', facecolors='none', linewidth=2, label='Centroid')
-
-                circle = patches.Circle((cx, cy), radius=test_radius, edgecolor='yellow', facecolor='none', linewidth=2)
-                ax.add_patch(circle)
-
-                ax.axis('off')
-
-                # Optionally, you can leave ax[1] empty or add something else there
-
-                output_dir = f'Adjusting/{repeat}/{marker_adjusting}'
-                os.makedirs(output_dir, exist_ok=True)
-
-                filename = f'{i+1}.png'
-                filepath = os.path.join(output_dir, filename)
-                plt.savefig(filepath, bbox_inches='tight')
-                plt.close(fig)
-                #----------------------------------------------------------------
-                counter = counter + 1
+            # selected boxes csv 
+            selection_output_dir = f"{directory}/{repeat}/selection"
+            selection_csv = f"{selection_output_dir}/img_DAPI_{condition}.csv"
+            # get selected ids:
+            selected_boxes_ids = load_allowed_ids(selection_csv)
+            selected_boxes_ids.sort()
 
 
-        print(f"Finished adjusting for {marker_adjusting}")
+            # Save binary mask images next to raw image
+            for i, img_box in enumerate(img_boxes):
+                if i+1 in selected_boxes_ids:
+                    # print(f"Starting {i+1} for Binary thresh adjustment----------------")
 
+                                                
+                    img_box = img_as_float(img_box)
 
-    # if adjusting:
-        # adjust("DAPI", 100)
-        # adjust("SOX2", 65)
-        # adjust("BRA", 80)
+                    # Get the binary maks with smoothing value set below
+                    smoothing = 10
+                    largest_region, binary_mask, blurred, binary_thresh = get_binary_mask(img_box, smoothing)
 
-        # adjust_napari(repeat, "DAPI", condition, converted_coordinates, cleaned_outer_radius_array, cleaned_mid_radius_array, cleaned_inner_radius_array)
-        # adjust_napari(repeat, "SOX2", condition, converted_coordinates, cleaned_outer_radius_array, cleaned_mid_radius_array, cleaned_inner_radius_array)
-        # adjust_napari(repeat, "BRA", condition, converted_coordinates, cleaned_outer_radius_array, cleaned_mid_radius_array, cleaned_inner_radius_array)
-        # adjust_napari(repeat, "GATA3", condition, converted_coordinates, cleaned_outer_radius_array, cleaned_mid_radius_array, cleaned_inner_radius_array)
+                        
+                    # Visualize binary mask ---------------------------------
+                    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+
+                    # Show original image (img_box)
+                    axes[0].imshow(img_box, cmap='gray')
+                    axes[0].set_title('Original Image')
+
+                    # Mark centroid
+                    cy, cx = largest_region.centroid  # centroid is (row, col) = (y, x)
+                    axes[0].scatter(cx, cy, s=50, edgecolor='red', facecolor='none', linewidth=2, label='Centroid')
+
+                    axes[0].axis('off')
+                    axes[0].legend(loc='upper right')
+
+                    # Show binary mask (mask is boolean, convert to int for visualization)
+                    axes[1].imshow(binary_mask, cmap='gray')
+                    axes[1].set_title(f'Binary Mask {binary_thresh:.3f}')
+                    axes[1].axis('off')
+
+                    # Plot histogram on third subplot
+                    axes[2].hist(blurred.ravel(), bins=256, range=(0, 1), color='gray')
+                    axes[2].axvline(x=binary_thresh, color='red', linestyle='--', label=f'Threshold = {binary_thresh:.3f}')
+                    axes[2].set_title("Pixel Intensity Histogram")
+                    axes[2].set_xlabel("Pixel Intensity")
+                    axes[2].set_ylabel("Number of Pixels")
+                    axes[2].legend()
+
+                    # Make output directory if it doesn't exist
+                    output_dir = f'{directory}/{repeat}/binary_adj/{condition}'
+                    os.makedirs(output_dir, exist_ok=True)
+
+                    # Save figure with a meaningful name (e.g., box index)
+                    filename = f'{i+1}.png'
+                    filepath = os.path.join(output_dir, filename)
+                    plt.savefig(filepath, bbox_inches='tight')
+                    plt.close(fig)  # Close the figure to save memory
+                    print(f"saved {i+1} for Binary thresh adjustment")
+
+                    #----------------------------------------------------------------
+
+                    return largest_region, binary_mask, blurred, binary_thresh
+
     
-    return converted_coordinates, outer_radius, mid_radius, inner_radius, largest_region_list, binary_mask_list
+
+def run_R2(directory, repeats, conditions, adjusting_values, adjusting=False):
 
 
+    for repeat in repeats:
+        for condition in conditions:
+
+            print(f"Repeat: {repeat}, Condition: {condition}")
+
+            outer_radius = adjusting_values["DAPI"]
+            mid_radius = adjusting_values["BRA"]
+            inner_radius = adjusting_values["SOX2"]
+
+            # LOADING DAPI---------------------------------------------------------------------------------------------
+            # DAPI is used to adjust for coordinates. 
+            image_boxes_path = f"{directory}/{repeat}/boxes_npz/img_DAPI_{condition}.npz"
+            img_boxes = load_boxes(image_boxes_path)
+
+            # selected boxes csv 
+            selection_output_dir = f"{directory}/{repeat}/selection"
+            selection_csv = f"{selection_output_dir}/img_DAPI_{condition}.csv"
+            # get selected ids:
+            selected_boxes_ids = load_allowed_ids(selection_csv)
+            selected_boxes_ids.sort()
+
+            # STEPS TO GET REFINED COORDINATES-----------------------------------------------------------------------
+    
+            # Refine coordinates 
+            coordinates, coordinates_ids, largest_region_list, binary_mask_list = get_coordinates(img_boxes, selection_csv)
+
+            # print what we have to reconfirm, all should be the same length 
+            print("All these below should be the same length:-----------------------")
+            print("coor len", len(coordinates))
+            print("coor id len", len(coordinates_ids))
+
+            # FIX EMPTY ARRAYS BY REFILLING (IDK WHY THIS HAPPENS)----------------------------------------------------
+            outer_fill_value = np.array([outer_radius])
+            mid_fill_value = np.array([mid_radius])
+            inner_fill_value = np.array([inner_radius])
+
+            # --------------------------------------------------------------------------------------------------------
+
+            # convert coordinates (in tuple format) into numpy array format
+            converted_coordinates = [np.array([[float(y), float(x)]]) for x, y in coordinates]
+
+
+            def adjust(marker_adjusting, outer_radius, mid_radius, inner_radius):
+
+                marker_boxes_path = f"{directory}/{repeat}/boxes_npz/img_{marker_adjusting}_{condition}.npz"
+                marker_boxes = load_boxes(marker_boxes_path)
+
+
+                # Get coordinates 
+                counter = 0
+                for i, marker_box in enumerate(marker_boxes):
+                    if i+1 in selected_boxes_ids:
+
+                        region = largest_region_list[counter]
+                        
+                        marker_box = img_as_float(marker_box)
+                    
+                        # Visualize binary mask ---------------------------------
+                        fig, ax = plt.subplots(figsize=(8, 4))
+
+                        # Use ax[0] for the original image and annotations
+                        ax.imshow(marker_box, cmap='gray')
+                        ax.set_title(f"{marker_adjusting}_{outer_radius:.1f}_{mid_radius:.1f}_{inner_radius:.1f}")
+
+                        cy, cx = region.centroid
+                        ax.scatter(cx, cy, s=50, edgecolors='red', facecolors='none', linewidth=2, label='Centroid')
+
+                        # make circles
+                        outer_circle = patches.Circle((cx, cy), radius=outer_radius, edgecolor='#9c27b0', facecolor='none', linewidth=2)
+                        mid_circle = patches.Circle((cx, cy), radius=mid_radius, edgecolor='#ffeb3b', facecolor='none', linewidth=2)
+                        inner_circle = patches.Circle((cx, cy), radius=inner_radius, edgecolor='#00bcd4', facecolor='none', linewidth=2)
+                        
+                        ax.add_patch(outer_circle)
+                        ax.add_patch(mid_circle)
+                        ax.add_patch(inner_circle)
+
+                        ax.axis('off')
+
+                        output_dir = f'{directory}/{repeat}/adjusting/{condition}_{marker_adjusting}'
+                        os.makedirs(output_dir, exist_ok=True)
+
+                        filename = f'{i+1}.png'
+                        filepath = os.path.join(output_dir, filename)
+                        plt.savefig(filepath, bbox_inches='tight')
+                        plt.close(fig)
+                        #----------------------------------------------------------------
+                        counter = counter + 1
+
+
+                print(f"Finished adjusting for {marker_adjusting}")
+
+
+            if adjusting:
+                for key, _ in adjusting_values.items():
+                    adjust(key, outer_radius, mid_radius, inner_radius)
+            
+            # save coordinates
+            coor_output_dir = f"{directory}/{repeat}/coordinates"
+            os.makedirs(coor_output_dir, exist_ok=True)
+
+            coordinates_path = f"{coor_output_dir}/{condition}.npz"
+            np.savez(coordinates_path, coords=converted_coordinates)
+
+            # save region (gastruloid area)
+            regions_output_dir = f"{directory}/{repeat}/regions"
+            os.makedirs(regions_output_dir, exist_ok=True)
+
+            regions_path = f"{regions_output_dir}/{condition}.npz"
+            np.savez(regions_path, regions=largest_region_list)
+            
+            # save binary mask 
+            binarymasks_output_dir = f"{directory}/{repeat}/binarymasks"
+            os.makedirs(binarymasks_output_dir, exist_ok=True)
+
+            binarymasks_path = f"{binarymasks_output_dir}/{condition}.npz"
+            np.savez(binarymasks_path, binarymasks=np.array(binary_mask_list, dtype=object))
+
+
+            

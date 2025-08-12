@@ -1,4 +1,5 @@
 from imports import *
+from f_modelDetection import load_boxes, load_allowed_ids
 
 
 def get_intensities(idx, image, center, diameter):
@@ -120,14 +121,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 
-def plot_wt_mutant_overlap(marker, repeat, wt_csv, mutant_csv, save_dir='plots'):
+def plot_wt_mutant_overlap(marker, repeat, wt_csv, mutant_csv, save_dir='plots', features=None):
     os.makedirs(save_dir, exist_ok=True)
 
     # Load CSVs
     df_wt = pd.read_csv(wt_csv)
     df_mut = pd.read_csv(mutant_csv)
 
-    features = ['intensity', 'normalized_intensity']
     condition_colors = {
         'WT': "#00da1d",
         'Mutant': "#ff320e"
@@ -176,7 +176,7 @@ def plot_wt_mutant_overlap(marker, repeat, wt_csv, mutant_csv, save_dir='plots')
                 bbox=dict(facecolor='white', alpha=0.7, edgecolor='gray'))
 
         plt.tight_layout()
-        output_path = os.path.join(save_dir, f'{repeat}/R{repeat}_{marker}_overlap_{feature}.png')
+        output_path = os.path.join(save_dir, f'{marker}_overlap_{feature}.png')
         plt.savefig(output_path)
         plt.close()
 
@@ -259,7 +259,7 @@ def combined_plot_intensity_vs_diameter(
 ):
     plt.figure(figsize=(10, 7))
 
-    for repeat, condition, csv1_path, csv2_path, marker in repeats_data:
+    for directory, repeat, condition, csv1_path, csv2_path, marker in repeats_data:
         location = marker_loc_dict.get(marker)
         if location is None:
             print(f"Skipping marker {marker}: location not found in marker_loc_dict.")
@@ -292,9 +292,120 @@ def combined_plot_intensity_vs_diameter(
     plt.legend()
     plt.tight_layout()
 
-    output_path = f'plots/{repeat}/R{repeat}_{marker}_{location}_diameterDis.png'
+    output_path = f'{directory}/{repeat}/plots/{marker}_{location}_diameterDis.png'
 
     plt.savefig(output_path)
     plt.close()
 
     print(f"Combined plot saved to: {output_path}")
+
+
+def get_distributions(directory, repeats, conditions, markers):
+
+    for repeat in repeats:
+        for condition in conditions:
+            print(f"Starting Repeat: {repeat}, condiiton: {condition}")
+            # load coordinates, regions and binary masks
+            print("loading coordinates...")
+            coor_output_dir = f"{directory}/{repeat}/coordinates"
+            coordinates_path = f"{coor_output_dir}/{condition}.npz"
+            print("Trying to load:", coordinates_path)
+            coord_data = np.load(coordinates_path)
+            coordinates = coord_data["coords"]
+
+            print("loading regions...")
+            regions_output_dir = f"{directory}/{repeat}/regions"
+            regions_path = f"{regions_output_dir}/{condition}.npz"
+            print("Trying to load:", regions_path)
+            regions_data = np.load(regions_path, allow_pickle=True)
+            regions = regions_data["regions"]
+            
+            print("loading binary masks...")
+            binarymasks_output_dir = f"{directory}/{repeat}/binarymasks"
+            binarymasks_path = f"{binarymasks_output_dir}/{condition}.npz"
+            print("Trying to load:", binarymasks_path)
+            binarymasks_data = np.load(binarymasks_path, allow_pickle=True)
+            binary_masks = binarymasks_data["binarymasks"]
+
+            # load selected IDs
+            selection_output_dir = f"{directory}/{repeat}/selection"
+            selection_csv = f"{selection_output_dir}/img_DAPI_{condition}.csv"
+            selected_boxes_ids = load_allowed_ids(selection_csv)
+            selected_boxes_ids.sort()
+            
+            def get_raw_distributions():
+                for marker in markers:
+                    print(f"Geting Raw Distribution for Marker: {marker}")
+
+                    # SET SAVING DIRECTORIES 
+                    intensity_means_output_path = f"{directory}/{repeat}/distribution/{condition}_{marker}.csv"
+                    intensity_directory = os.path.dirname(intensity_means_output_path)
+                    os.makedirs(intensity_directory, exist_ok=True)
+
+                    # load boxes 
+                    image_boxes_path = f"{directory}/{repeat}/boxes_npz/img_{marker}_{condition}.npz"
+                    img_boxes = load_boxes(image_boxes_path)
+
+                    # FILTER IMG_BOX to only contain selected ones
+                    filtered_img_boxes = [img_box for i, img_box in enumerate(img_boxes) if i+1 in selected_boxes_ids]
+
+                    # CALCULATE DIMAETER AND CIRCULARITY OF MODEL, USE TO GET INTENSITY
+                    diameters, circularities = get_all_diameter(regions, binary_masks, filtered_img_boxes)
+                    intensity_means = get_all_intensities(filtered_img_boxes, coordinates, diameters)
+
+                    # SAVE TO CSV
+                    with open(intensity_means_output_path, 'w', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(['Index', 'diameter', 'intensity', 'circularity']) 
+                        for i in range(len(diameters)):
+                            writer.writerow([i, diameters[i], intensity_means[i], circularities[i]])
+
+                    # PLOT DATA ON CSV AND SAVE 
+                    save_histograms(intensity_means_output_path) 
+
+            def normalize_distributions():
+                for marker in markers:                    
+                    if marker != "DAPI":
+                        print(f"Normalizing data for Marker: {marker}")
+                        intensity_means_output_path = f"{directory}/{repeat}/distribution/{condition}_{marker}.csv"
+
+                        # remove the useless diameter and circularity collumns (this is only relevat for DAPI)
+                        fix_marker_csv(intensity_means_output_path, intensity_means_output_path)
+                            
+                        # normalize intensity values by DAPI 
+                        DAPI_intensity_path = f"{directory}/{repeat}/distribution/{condition}_DAPI.csv"
+                        normalize_by_dapi(intensity_means_output_path, DAPI_intensity_path, intensity_means_output_path)
+
+            get_raw_distributions()
+            print(f"Finished getting raw distributions for Repeat: {repeat}, condiiton: {condition}")
+            normalize_distributions()
+            print(f"Finished Normalizing distributions for Repeat: {repeat}, condiiton: {condition}")
+
+
+        def overlapdensity_plot():
+                
+            # whats to be plotted is different depending on marker 
+            DAPI_features = ['intensity', 'diameter']
+            marker_features = ['normalized_intensity']
+
+            for marker in markers:
+                print(f"Plotting data for Marker: {marker}")
+                wt_csv = f"{directory}/{repeat}/distribution/{conditions[0]}_{marker}.csv"
+                mutant_csv = f"{directory}/{repeat}/distribution/{conditions[1]}_{marker}.csv"
+                if marker == "DAPI":
+                    plot_wt_mutant_overlap(marker, repeat, wt_csv, mutant_csv, save_dir=f'{directory}/{repeat}/plots', features=DAPI_features)
+                else:
+                    plot_wt_mutant_overlap(marker, repeat, wt_csv, mutant_csv, save_dir=f'{directory}/{repeat}/plots', features=marker_features)
+
+        overlapdensity_plot()
+
+
+
+              
+
+
+                
+
+
+
+
