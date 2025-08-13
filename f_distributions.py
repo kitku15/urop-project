@@ -299,6 +299,52 @@ def combined_plot_intensity_vs_diameter(
 
     print(f"Combined plot saved to: {output_path}")
 
+def combined_plot_intensity_vs_DAPIintensity(
+    repeats_data,  # List of tuples: (repeat_label, csv1_path, csv2_path, marker)
+    marker_loc_dict,  # e.g., {'SOX2': 'inner', 'BRA': 'mid', 'GATA3': 'outer'}
+):
+    plt.figure(figsize=(10, 7))
+
+    for directory, repeat, condition, csv1_path, csv2_path, marker in repeats_data:
+        location = marker_loc_dict.get(marker)
+        if location is None:
+            print(f"Skipping marker {marker}: location not found in marker_loc_dict.")
+            continue
+
+        # Load CSVs
+        df_intensity = pd.read_csv(csv1_path)
+        df_diameter = pd.read_csv(csv2_path)
+        df_intensity['aligned_index'] = df_intensity['ID'] - 1
+
+        # Filter and merge
+        df_marker = df_intensity[df_intensity['marker'] == marker]
+        merged = df_marker.merge(df_diameter, left_on='aligned_index', right_on='Index')
+        num_points = merged.shape[0]
+
+        # Scatter plot for this group
+        plt.scatter(
+            merged['intensity'],
+            merged[location],
+            alpha=0.7,
+            label=f'{condition}_{marker} (Repeat {repeat}, N={num_points})'
+        )
+
+    # Final plot settings
+    plt.ylim(0, 1)
+    plt.xlabel('DAPI Intensity')
+    plt.ylabel('Marker Intensity (region-specific)')
+    plt.title('Combined Marker Intensity vs DAPI Intensity')
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+
+    output_path = f'{directory}/{repeat}/plots/{marker}_{location}_DAPIIntensityDis.png'
+
+    plt.savefig(output_path)
+    plt.close()
+
+    print(f"Combined plot saved to: {output_path}")
+
 
 def get_distributions(directory, repeats, conditions, markers):
 

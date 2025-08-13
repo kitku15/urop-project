@@ -31,7 +31,7 @@ def normalize_tiff(tiff):
 
 
 
-def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_r, outer_r, print_info=False):
+def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_r, outer_r, GATA3_mask, print_info=False):
     """
     Measures intensity in three non-overlapping radial zones: inner, mid ring, outer ring.
 
@@ -75,6 +75,12 @@ def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_
         signal_mid = image * ((mask > 0) & mask_mid)
         signal_outer = image * ((mask > 0) & mask_outer)
 
+        # If marker is "GATA3" we apply the additional filter we made to filter out noise in gastruloid center
+        if marker == "GATA3":
+            signal_inner = image * ((mask > 0) & mask_inner & (GATA3_mask > 0))
+            signal_mid = image * ((mask > 0) & mask_mid & (GATA3_mask > 0))
+            signal_outer = image * ((mask > 0) & mask_outer & (GATA3_mask > 0))
+
         # Sum signal only (not mean over signal area)
         sum_inner = np.sum(signal_inner)
         sum_mid = np.sum(signal_mid)
@@ -84,7 +90,6 @@ def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_
         mean_inner = sum_inner / area_inner if area_inner > 0 else 0
         mean_mid = sum_mid / area_mid if area_mid > 0 else 0
         mean_outer = sum_outer / area_outer if area_outer > 0 else 0
-
     else:
         # For DAPI: no masking — use raw pixel intensities
         mean_inner = np.sum(image[mask_inner]) / area_inner if area_inner > 0 else 0
@@ -134,7 +139,7 @@ def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_
 
 
 
-def measure_all_blob_intensities_zones(marker, img_boxes, mask_boxes, coordinates, inner_radius, mid_radius, outer_radius):
+def measure_all_blob_intensities_zones(marker, img_boxes, mask_boxes, coordinates, inner_radius, mid_radius, outer_radius, GATA3_masks):
     """
     Measures intensities for all blobs using constant inner, mid, and outer radii.
 
@@ -153,8 +158,8 @@ def measure_all_blob_intensities_zones(marker, img_boxes, mask_boxes, coordinate
     outer_means = []
 
 
-    for idx, (img, mask, center) in enumerate(zip(img_boxes, mask_boxes, coordinates)):
-        inner, mid, outer = measure_blob_intensity_zones(idx, marker, img, mask, center, inner_radius, mid_radius, outer_radius)
+    for idx, (img, mask, center, GATA3_mask) in enumerate(zip(img_boxes, mask_boxes, coordinates, GATA3_masks)):
+        inner, mid, outer = measure_blob_intensity_zones(idx, marker, img, mask, center, inner_radius, mid_radius, outer_radius, GATA3_mask)
         inner_means.append(inner)
         mid_means.append(mid)
         outer_means.append(outer)
@@ -207,15 +212,18 @@ def intensities_per_marker(directory, repeats, conditions, markers, adjusting_va
                 mask_boxes = load_boxes(mask_boxes_path)
 
                 # FILTER IMG_BOX to only contain selected ones
-                filtered_img_boxes = [img_box for i, img_box in enumerate(img_boxes) if i in selected_boxes_ids]
-                filtered_mask_boxes = [mask_box for i, mask_box in enumerate(mask_boxes) if i in selected_boxes_ids]
+                filtered_img_boxes = [img_box for i, img_box in enumerate(img_boxes) if i+1 in selected_boxes_ids]
+                filtered_mask_boxes = [mask_box for i, mask_box in enumerate(mask_boxes) if i+1 in selected_boxes_ids]
 
+                # GET GATA 3 MASKS
+                loaded_GATA3masks = np.load(f"{directory}/{repeat}/GATA3filter/masks/{condition}.npz")
+                GATA3_masks = [loaded_GATA3masks[key] for key in loaded_GATA3masks]  
 
                 # function to measure intensity and save 
                 def measure_intensity_and_save(inner_radius, mid_radius, outer_radius):
 
                     # get intensities 
-                    inner_means, mid_means, outer_means = measure_all_blob_intensities_zones(marker, filtered_img_boxes, filtered_mask_boxes, coordinates, inner_radius, mid_radius, outer_radius)
+                    inner_means, mid_means, outer_means = measure_all_blob_intensities_zones(marker, filtered_img_boxes, filtered_mask_boxes, coordinates, inner_radius, mid_radius, outer_radius, GATA3_masks)
 
                     # Save
                     inner_output_path = f"{directory}/{repeat}/intensities/inner/{marker}_{condition}"
@@ -520,3 +528,99 @@ def plot_marker_condition_overlap(csv_path, repeat, marker, save_dir='plots'):
     print(f"Overlap %: {overlap_percentage:.2f}%")
 
 
+def variance_of_laplacian(image):
+    """Compute the Laplacian of the image and return the variance."""
+    return cv2.Laplacian(image, cv2.CV_64F).var()
+
+def detect_blurriness_in_parts(image, grid_size, blur_threshold):
+
+    # Ensure grayscale
+    if len(image.shape) == 2:
+        gray = image
+        image_bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    else:
+        raise ValueError(f"Unsupported image shape: {image.shape}")
+    
+    h, w = gray.shape
+    num_rows, num_cols = grid_size
+    cell_h, cell_w = h // num_rows, w // num_cols
+    mask = np.zeros((h, w), dtype=np.uint8)
+
+    for row in range(num_rows):
+        for col in range(num_cols):
+            y1, y2 = row * cell_h, (row + 1) * cell_h
+            x1, x2 = col * cell_w, (col + 1) * cell_w
+            cell = gray[y1:y2, x1:x2]
+
+            score = variance_of_laplacian(cell)
+            is_sharp = score >= blur_threshold
+            if is_sharp:
+                mask[y1:y2, x1:x2] = 1  # sharp = 1
+
+    # Convert mask to 3-channel so we can stack it with original image
+    mask_rgb = (mask * 255).astype(np.uint8)  # 0 or 255
+    mask_rgb = cv2.cvtColor(mask_rgb, cv2.COLOR_GRAY2BGR)
+
+    # Normalize original grayscale image
+    image_bgr_float = image_bgr.astype(np.float32)
+    image_bgr_float /= image_bgr_float.max()
+
+    # Convert mask to float 0–1
+    mask_rgb_float = mask_rgb.astype(np.float32) / 255.0
+
+    # Stack them
+    combined_float = np.hstack((image_bgr_float, mask_rgb_float))
+
+    return combined_float, mask
+
+
+def make_GATA3_filter(directory, repeats, conditions):
+    marker = "GATA3"
+    for repeat in repeats:
+        for condition in conditions:
+            print(f"------------Repeat: {repeat}, Condition: {condition}, marker: {marker}")
+
+            # output directort for images (to visualize the mask)
+            img_output_dir = f"{directory}/{repeat}/GATA3filter/images_{condition}"
+            os.makedirs(img_output_dir, exist_ok=True)
+
+            # get selected boxes of GATA3
+            selected_boxes_ids = load_allowed_ids(f'{directory}/{repeat}/selection/img_DAPI_{condition}.csv')
+            selected_boxes_ids.sort()
+
+            image_boxes_path = f"{directory}/{repeat}/boxes_npz/img_{marker}_{condition}.npz"  
+            img_boxes = load_boxes(image_boxes_path)
+            filtered_img_boxes_with_index = [(i, img_box) for i, img_box in enumerate(img_boxes) if i+1 in selected_boxes_ids]
+
+            masks = []
+            all_box_bluriness = []
+            for i, image in filtered_img_boxes_with_index:
+                # calculate the total blurriness of the image
+                box_blurriness = variance_of_laplacian(image)
+                all_box_bluriness.append(box_blurriness)
+
+            bluriness_average = sum(all_box_bluriness) / len(all_box_bluriness)
+            blur_threshold = bluriness_average * 0.75
+
+            for i, image in filtered_img_boxes_with_index:
+                # detect blurriness and make mask
+                grid_size = (30, 30)
+                output_image, mask = detect_blurriness_in_parts(image, grid_size, blur_threshold)
+
+                # save image (for visual validation side by side with image)
+                savepath = os.path.join(img_output_dir, f"{i+1}.png")
+                plt.imsave(savepath, output_image, cmap='gray')
+
+                masks.append(mask)
+
+
+            # save GATA3 masks
+            mask_output_dir =  f"{directory}/{repeat}/GATA3filter/masks"
+            os.makedirs(mask_output_dir, exist_ok=True)
+
+            masks_path = f"{mask_output_dir}/{condition}.npz"
+            np.savez_compressed(masks_path, *masks)
+            print(f"Saved GATA3 filter mask for Repeat: {repeat}, Condition: {condition}")
+
+            
+            print(f"Bluriness for this set is {bluriness_average}")
