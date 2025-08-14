@@ -588,3 +588,36 @@ def detect_blob_all(directory, markers, conditions, repeats):
                         all_coordinates=np.array(all_coordinates, dtype=object),
                         all_radii=np.array(all_radii, dtype=object))
 
+def boxes_tiff_selected(directory, repeats, conditions, markers):
+    for repeat in repeats:
+        for condition in conditions:
+            for marker in markers:
+                print(f"------------Repeat: {repeat}, Condition: {condition}, marker: {marker}")
+
+                # output directory for images 
+                img_output_dir = f"{directory}/{repeat}/boxes_tiff_selected/img_{marker}_{condition}"
+                os.makedirs(img_output_dir, exist_ok=True)
+
+                # get selected boxes
+                selected_boxes_ids = load_allowed_ids(f'{directory}/{repeat}/selection/img_DAPI_{condition}.csv')
+                selected_boxes_ids.sort()
+                selected_set = set(str(num) for num in selected_boxes_ids)
+
+                boxes_tiffs_path = f"{directory}/{repeat}/boxes_tiff/img_{marker}_{condition}"  
+
+                # Get all files in the directory
+                all_files = os.listdir(boxes_tiffs_path)
+
+                # Sort files numerically by their base name
+                all_files.sort(key=lambda x: int(os.path.splitext(x)[0]))
+
+                counter = 1
+                for filename in all_files:
+                    name, ext = os.path.splitext(filename)
+                    if name in selected_set:
+                        counter_str = str(counter)
+                        src_path = os.path.join(boxes_tiffs_path, filename)
+                        dst_path = os.path.join(img_output_dir, f"{counter_str}.tiff")
+                        shutil.copy2(src_path, dst_path)
+                        print(f"Copied {filename} into {counter}")
+                        counter += 1
