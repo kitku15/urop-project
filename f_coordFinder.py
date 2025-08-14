@@ -357,19 +357,33 @@ def adjust_binaryMask(directory, repeats, conditions):
 
                     return largest_region, binary_mask, blurred, binary_thresh
 
+def get_bin_radii(num_bins, outer_radius):
+    """
+    Returns a list of outer radii for bins of equal thickness.
     
+    :param num_bins: Number of bins (int)
+    :param outer_radius: Radius of the full circle (float)
+    :return: List of radii (float) from inner to outer
+    """
+    step = outer_radius / num_bins  # thickness of each bin
+    radii = [(i + 1) * step for i in range(num_bins)]
+    return radii
 
-def run_R2(directory, repeats, conditions, adjusting_values, adjusting=False):
+def run_R2(directory, repeats, conditions, markers, gastruloid_radius, num_bins, adjusting=False, loading=True):
+
+    print("Numbers of bins set:", num_bins)
+
+    # code that calculates the radius of all bins based on gastruloid_radius and bins_no
+    # radiis is a list of radiuses of length num_bins 
+    radiis = get_bin_radii(num_bins, gastruloid_radius)
+
+    print("Radius list:", radiis)
 
 
     for repeat in repeats:
         for condition in conditions:
 
             print(f"Repeat: {repeat}, Condition: {condition}")
-
-            outer_radius = adjusting_values["DAPI"]
-            mid_radius = adjusting_values["BRA"]
-            inner_radius = adjusting_values["SOX2"]
 
             # LOADING DAPI---------------------------------------------------------------------------------------------
             # DAPI is used to adjust for coordinates. 
@@ -383,28 +397,38 @@ def run_R2(directory, repeats, conditions, adjusting_values, adjusting=False):
             selected_boxes_ids = load_allowed_ids(selection_csv)
             selected_boxes_ids.sort()
 
-            # STEPS TO GET REFINED COORDINATES-----------------------------------------------------------------------
-    
-            # Refine coordinates 
-            coordinates, coordinates_ids, largest_region_list, binary_mask_list = get_coordinates(img_boxes, selection_csv)
+            if not loading:
 
-            # print what we have to reconfirm, all should be the same length 
-            print("All these below should be the same length:-----------------------")
-            print("coor len", len(coordinates))
-            print("coor id len", len(coordinates_ids))
+                # STEPS TO GET REFINED COORDINATES-----------------------------------------------------------------------
+        
+                # Refine coordinates 
+                coordinates, coordinates_ids, largest_region_list, binary_mask_list = get_coordinates(img_boxes, selection_csv)
 
-            # FIX EMPTY ARRAYS BY REFILLING (IDK WHY THIS HAPPENS)----------------------------------------------------
-            outer_fill_value = np.array([outer_radius])
-            mid_fill_value = np.array([mid_radius])
-            inner_fill_value = np.array([inner_radius])
+                # print what we have to reconfirm, all should be the same length 
+                print("All these below should be the same length:-----------------------")
+                print("coor len", len(coordinates))
+                print("coor id len", len(coordinates_ids))
 
-            # --------------------------------------------------------------------------------------------------------
-
-            # convert coordinates (in tuple format) into numpy array format
-            converted_coordinates = [np.array([[float(y), float(x)]]) for x, y in coordinates]
+                # convert coordinates (in tuple format) into numpy array format
+                converted_coordinates = [np.array([[float(y), float(x)]]) for x, y in coordinates]
 
 
-            def adjust(marker_adjusting, outer_radius, mid_radius, inner_radius):
+            if loading:
+                # Load coordinates 
+                coor_output_dir = f"{directory}/{repeat}/coordinates"
+                coordinates_path = f"{coor_output_dir}/{condition}.npz"
+
+                data = np.load(coordinates_path)
+                coordinates = data["coords"]
+
+            
+            # print(len(coordinates))
+            # print(len(selected_boxes_ids))
+            # print(len(img_boxes))
+                       
+
+
+            def adjust(marker_adjusting, radiis):
 
                 marker_boxes_path = f"{directory}/{repeat}/boxes_npz/img_{marker_adjusting}_{condition}.npz"
                 marker_boxes = load_boxes(marker_boxes_path)
@@ -414,8 +438,6 @@ def run_R2(directory, repeats, conditions, adjusting_values, adjusting=False):
                 counter = 0
                 for i, marker_box in enumerate(marker_boxes):
                     if i+1 in selected_boxes_ids:
-
-                        region = largest_region_list[counter]
                         
                         marker_box = img_as_float(marker_box)
                     
@@ -424,19 +446,15 @@ def run_R2(directory, repeats, conditions, adjusting_values, adjusting=False):
 
                         # Use ax[0] for the original image and annotations
                         ax.imshow(marker_box, cmap='gray')
-                        ax.set_title(f"{marker_adjusting}_{outer_radius:.1f}_{mid_radius:.1f}_{inner_radius:.1f}")
+                        ax.set_title(f"{marker_adjusting}_{num_bins}_{gastruloid_radius}")
 
-                        cy, cx = region.centroid
+                        cx, cy = coordinates[counter][0]
                         ax.scatter(cx, cy, s=50, edgecolors='red', facecolors='none', linewidth=2, label='Centroid')
 
                         # make circles
-                        outer_circle = patches.Circle((cx, cy), radius=outer_radius, edgecolor='#9c27b0', facecolor='none', linewidth=2)
-                        mid_circle = patches.Circle((cx, cy), radius=mid_radius, edgecolor='#ffeb3b', facecolor='none', linewidth=2)
-                        inner_circle = patches.Circle((cx, cy), radius=inner_radius, edgecolor='#00bcd4', facecolor='none', linewidth=2)
-                        
-                        ax.add_patch(outer_circle)
-                        ax.add_patch(mid_circle)
-                        ax.add_patch(inner_circle)
+                        for radii in radiis:
+                            circle = patches.Circle((cx, cy), radius=radii, edgecolor="#FF93BC", facecolor='none', linewidth=1)
+                            ax.add_patch(circle)
 
                         ax.axis('off')
 
@@ -455,29 +473,33 @@ def run_R2(directory, repeats, conditions, adjusting_values, adjusting=False):
 
 
             if adjusting:
-                for key, _ in adjusting_values.items():
-                    adjust(key, outer_radius, mid_radius, inner_radius)
+                for marker in markers:
+                    if marker == "DAPI":
+                        adjust(marker, radiis)
+
+            # if not loading stuff (as in raw identifying coordinates etc. no need to save this. )
+            if not loading:
             
-            # save coordinates
-            coor_output_dir = f"{directory}/{repeat}/coordinates"
-            os.makedirs(coor_output_dir, exist_ok=True)
+                # save coordinates
+                coor_output_dir = f"{directory}/{repeat}/coordinates"
+                os.makedirs(coor_output_dir, exist_ok=True)
 
-            coordinates_path = f"{coor_output_dir}/{condition}.npz"
-            np.savez(coordinates_path, coords=converted_coordinates)
+                coordinates_path = f"{coor_output_dir}/{condition}.npz"
+                np.savez(coordinates_path, coords=converted_coordinates)
 
-            # save region (gastruloid area)
-            regions_output_dir = f"{directory}/{repeat}/regions"
-            os.makedirs(regions_output_dir, exist_ok=True)
+                # save region (gastruloid area)
+                regions_output_dir = f"{directory}/{repeat}/regions"
+                os.makedirs(regions_output_dir, exist_ok=True)
 
-            regions_path = f"{regions_output_dir}/{condition}.npz"
-            np.savez(regions_path, regions=largest_region_list)
-            
-            # save binary mask 
-            binarymasks_output_dir = f"{directory}/{repeat}/binarymasks"
-            os.makedirs(binarymasks_output_dir, exist_ok=True)
+                regions_path = f"{regions_output_dir}/{condition}.npz"
+                np.savez(regions_path, regions=largest_region_list)
+                
+                # save binary mask 
+                binarymasks_output_dir = f"{directory}/{repeat}/binarymasks"
+                os.makedirs(binarymasks_output_dir, exist_ok=True)
 
-            binarymasks_path = f"{binarymasks_output_dir}/{condition}.npz"
-            np.savez(binarymasks_path, binarymasks=np.array(binary_mask_list, dtype=object))
+                binarymasks_path = f"{binarymasks_output_dir}/{condition}.npz"
+                np.savez(binarymasks_path, binarymasks=np.array(binary_mask_list, dtype=object))
 
 
             

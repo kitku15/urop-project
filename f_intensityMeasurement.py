@@ -1,5 +1,5 @@
 from imports import *
-from f_coordFinder import get_info
+from f_coordFinder import get_info, get_bin_radii
 from f_modelDetection import load_allowed_ids, load_boxes
 from f_validation import read_paths
 from scipy.interpolate import make_interp_spline
@@ -31,7 +31,7 @@ def normalize_tiff(tiff):
 
 
 
-def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_r, outer_r, GATA3_mask, print_info=False):
+def measure_blob_intensity_zones(idx, marker, image, mask, center, radiis, GATA3_mask, print_info=False):
     """
     Measures intensity in three non-overlapping radial zones: inner, mid ring, outer ring.
 
@@ -55,46 +55,56 @@ def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_
     yy, xx = np.ogrid[:h, :w]
     dist_sq = (xx - cx) ** 2 + (yy - cy) ** 2
 
-    # Define radial bin masks
-    mask_inner = dist_sq <= inner_r**2
-    mask_mid = (dist_sq <= mid_r**2) & (~mask_inner)
-    mask_outer = (dist_sq <= outer_r**2) & (~(mask_inner | mask_mid))
+    # calculate intensity per bin
+    # example of radiis: [15.7, 31.4, 47.1, 62.8, 78.5, 94.2, 110.0]
 
-    # Total pixel counts in each zone
-    area_inner = np.count_nonzero(mask_inner)
-    area_mid = np.count_nonzero(mask_mid)
-    area_outer = np.count_nonzero(mask_outer)
+    signal_means = [] # the length of this list will be the length of radiis (num_bins)
 
-    # If marker is not "DAPI", apply binary intensity mask
-    if marker != "DAPI":
-        if image.shape != mask.shape:
-            raise ValueError(f"Image and mask must have the same shape, got {image.shape} and {mask.shape}")
+    for i, radii in enumerate(radiis):
 
-        # Apply signal mask: only count values where signal exists
-        signal_inner = image * ((mask > 0) & mask_inner)
-        signal_mid = image * ((mask > 0) & mask_mid)
-        signal_outer = image * ((mask > 0) & mask_outer)
+        # MAKE BIN MASK
+        if i == 0:
+            # special case for innermost bin (circle not donut)
+            bin_mask = dist_sq <= radii**2
 
-        # If marker is "GATA3" we apply the additional filter we made to filter out noise in gastruloid center
-        if marker == "GATA3":
-            signal_inner = image * ((mask > 0) & mask_inner & (GATA3_mask > 0))
-            signal_mid = image * ((mask > 0) & mask_mid & (GATA3_mask > 0))
-            signal_outer = image * ((mask > 0) & mask_outer & (GATA3_mask > 0))
+        else:
+            # for all other cases we need to also make a mask of the smaller bin (donut)
+            current_radii = radii
+            inner_radii = radiis[i-1]
 
-        # Sum signal only (not mean over signal area)
-        sum_inner = np.sum(signal_inner)
-        sum_mid = np.sum(signal_mid)
-        sum_outer = np.sum(signal_outer)
+            inner_bin_mask = dist_sq <= inner_radii**2
+            bin_mask = (dist_sq <= current_radii**2) & (~inner_bin_mask)
 
-        # Normalize to total area of radial bin
-        mean_inner = sum_inner / area_inner if area_inner > 0 else 0
-        mean_mid = sum_mid / area_mid if area_mid > 0 else 0
-        mean_outer = sum_outer / area_outer if area_outer > 0 else 0
-    else:
-        # For DAPI: no masking — use raw pixel intensities
-        mean_inner = np.sum(image[mask_inner]) / area_inner if area_inner > 0 else 0
-        mean_mid = np.sum(image[mask_mid]) / area_mid if area_mid > 0 else 0
-        mean_outer = np.sum(image[mask_outer]) / area_outer if area_outer > 0 else 0
+        # count pixels in area selected
+        bin_area = np.count_nonzero(bin_mask)
+
+
+        # if marker is not DAPI, apply binary intensity mask (made from ImageJ)
+        if marker != "DAPI":
+            if image.shape != mask.shape:
+                raise ValueError(f"Image and mask must have the same shape, got {image.shape} and {mask.shape}")
+            
+            
+
+            # Apply signal mask: only count values where signal exists
+            if marker == "GATA3":
+                # add special mask for GATA3 only
+                signal = image * ((mask > 0) & bin_mask & (GATA3_mask > 0))
+            else:
+                signal = image * ((mask > 0) & bin_mask)
+
+
+            # Sum signal only (not mean over signal area)
+            signal_sum = np.sum(signal)
+
+            # Normalize to total area of radial bin
+            signal_mean = signal_sum / bin_area if bin_area > 0 else 0
+        else:
+            # this is for DAPI: no masking — use raw pixel intensities
+            signal_mean = np.sum(image[bin_mask]) / bin_area if bin_area > 0 else 0
+
+        # add to signal means list
+        signal_means.append(signal_mean)
 
     def visualize_zones(marker, image, mask, center, inner_r, mid_r, outer_r, output_path):
         h, w = image.shape
@@ -134,12 +144,12 @@ def measure_blob_intensity_zones(idx, marker, image, mask, center, inner_r, mid_
     #     output_path = f'intensities/visualize/1_WT_{marker}_{idx+1}.png'
     #     visualize_zones(marker, image, mask, center, inner_r, mid_r, outer_r, output_path)
 
-    return mean_inner, mean_mid, mean_outer
+    return signal_means
 
 
 
 
-def measure_all_blob_intensities_zones(marker, img_boxes, mask_boxes, coordinates, inner_radius, mid_radius, outer_radius, GATA3_masks):
+def measure_all_blob_intensities_zones(marker, img_boxes, mask_boxes, coordinates, radiis, GATA3_masks):
     """
     Measures intensities for all blobs using constant inner, mid, and outer radii.
 
@@ -153,18 +163,13 @@ def measure_all_blob_intensities_zones(marker, img_boxes, mask_boxes, coordinate
     Returns:
         tuple of 3 lists: (inner_means, mid_means, outer_means)
     """
-    inner_means = []
-    mid_means = []
-    outer_means = []
-
+    bin_means = []
 
     for idx, (img, mask, center, GATA3_mask) in enumerate(zip(img_boxes, mask_boxes, coordinates, GATA3_masks)):
-        inner, mid, outer = measure_blob_intensity_zones(idx, marker, img, mask, center, inner_radius, mid_radius, outer_radius, GATA3_mask)
-        inner_means.append(inner)
-        mid_means.append(mid)
-        outer_means.append(outer)
+        means = measure_blob_intensity_zones(idx, marker, img, mask, center, radiis, GATA3_mask)
+        bin_means.append(means)
 
-    return inner_means, mid_means, outer_means
+    return bin_means
 
 
 
@@ -183,12 +188,13 @@ def get_radius(csv_path, current_repeat, current_condition):
 
 
 
-def intensities_per_marker(directory, repeats, conditions, markers, adjusting_values):
+def intensities_per_marker(directory, repeats, conditions, markers, gastruloid_radius, num_bins):
 
-    outer_r = adjusting_values["DAPI"]
-    mid_r = adjusting_values["BRA"]
-    inner_r = adjusting_values["SOX2"]
-                    
+
+    print("Numbers of bins set:", num_bins)
+    radiis = get_bin_radii(num_bins, gastruloid_radius)
+    print("Radius list:", radiis)
+
     for repeat in repeats:
         for condition in conditions:
             # Load coordinates 
@@ -201,7 +207,7 @@ def intensities_per_marker(directory, repeats, conditions, markers, adjusting_va
             for marker in markers:
                 print(f"------------Repeat: {repeat}, Condition: {condition}, marker: {marker}")
                     
-                # get selected ids:
+                # get selected ids, masks and boxes:
                 selected_boxes_ids = load_allowed_ids(f'{directory}/{repeat}/selection/img_DAPI_{condition}.csv')
                 selected_boxes_ids.sort()
 
@@ -220,65 +226,40 @@ def intensities_per_marker(directory, repeats, conditions, markers, adjusting_va
                 GATA3_masks = [loaded_GATA3masks[key] for key in loaded_GATA3masks]  
 
                 # function to measure intensity and save 
-                def measure_intensity_and_save(inner_radius, mid_radius, outer_radius):
+                def measure_intensity_and_save(radiis):
 
                     # get intensities 
-                    inner_means, mid_means, outer_means = measure_all_blob_intensities_zones(marker, filtered_img_boxes, filtered_mask_boxes, coordinates, inner_radius, mid_radius, outer_radius, GATA3_masks)
+                    bin_means = measure_all_blob_intensities_zones(marker, filtered_img_boxes, filtered_mask_boxes, coordinates, radiis, GATA3_masks)
 
                     # Save
-                    inner_output_path = f"{directory}/{repeat}/intensities/inner/{marker}_{condition}"
-                    mid_output_path = f"{directory}/{repeat}/intensities/mid/{marker}_{condition}"
-                    outer_output_path = f"{directory}/{repeat}/intensities/outer/{marker}_{condition}"
-                                
+                    bin_means_dir = f"{directory}/{repeat}/intensities"
+                    os.makedirs(bin_means_dir, exist_ok=True)
 
-                    inner_output_path_directory = os.path.dirname(inner_output_path)
-                    os.makedirs(inner_output_path_directory, exist_ok=True)
+                    bin_means_output_path = f"{bin_means_dir}/{num_bins}_{marker}_{condition}"
+                    np.save(bin_means_output_path, bin_means)
 
-                    mid_output_path_directory = os.path.dirname(mid_output_path)
-                    os.makedirs(mid_output_path_directory, exist_ok=True)
-
-                    outer_output_path_directory = os.path.dirname(outer_output_path)
-                    os.makedirs(outer_output_path_directory, exist_ok=True)
-
-
-                    np.save(inner_output_path, inner_means)
-                    np.save(mid_output_path, mid_means)
-                    np.save(outer_output_path, outer_means)
-                        
-                    # if marker == "DAPI": dupa
-                    #     print(inner_means, mid_means, outer_means)
-
-                    print("saved to:", inner_output_path, mid_output_path, outer_output_path)
+                    print("saved to:", bin_means_output_path)
 
                 # run function above
-                measure_intensity_and_save(inner_r, mid_r, outer_r)
+                measure_intensity_and_save(radiis)
             
 
+def meta_intensities_save(directory, repeat, condition, marker, bins, num_bins):
+    """
+    Saves metadata and bin intensity values to meta_intensities.csv.
 
+    Parameters:
+        directory (str): Folder to save the CSV.
+        repeat (int/str): Repeat number or label.
+        condition (str): Experimental condition.
+        marker (str): Marker name.
+        bins (list): List of bin values (length can vary).
+    """
 
-def meta_intensities_save(directory, repeat, condition, marker, outer, mid, inner):
+    # Create row: metadata + bin values
+    new_row = [repeat, condition, marker] + bins
 
-    new_row = [repeat, condition, marker, outer, mid, inner]
-
-    csv_file = f'{directory}/meta_intensities.csv'
-
-    # Check if file exists
-    file_exists = os.path.isfile(csv_file)
-
-    with open(csv_file, 'a', newline='') as f:
-        writer = csv.writer(f)
-
-        # Write header only if file doesn't exist
-        if not file_exists:
-            writer.writerow(['repeat', 'condition', 'marker', 'outer', 'mid', 'inner'])  
-
-        writer.writerow(new_row)
-
-def meta_intensities_save_individual(directory, ID, repeat, condition, marker, outer, mid, inner):
-
-    new_row = [ID, marker, outer, mid, inner]
-
-    csv_file = f'{directory}/{repeat}/intensities/meta_individual_{condition}.csv'
+    csv_file = os.path.join(directory, f'{num_bins}_meta_intensities.csv')
 
     # Check if file exists
     file_exists = os.path.isfile(csv_file)
@@ -288,83 +269,104 @@ def meta_intensities_save_individual(directory, ID, repeat, condition, marker, o
 
         # Write header only if file doesn't exist
         if not file_exists:
-            writer.writerow(['ID', 'marker', 'outer', 'mid', 'inner'])  
+            header = ['repeat', 'condition', 'marker'] + [f'bin_{i+1}' for i in range(len(bins))]
+            writer.writerow(header)
 
         writer.writerow(new_row)
 
 
-def normalize_markers(directory, repeats, conditions, markers):
-    levels = ["outer", "mid", "inner"]
+def meta_intensities_save_individual(directory, ID, repeat, condition, marker, bins, num_bins):
+    """
+    Saves individual metadata and bin intensity values to meta_individual CSV.
+
+    Parameters:
+        directory (str): Base folder to save the CSV.
+        ID (str/int): Identifier for the individual.
+        repeat (str/int): Repeat number or label (used for folder path).
+        condition (str): Experimental condition.
+        marker (str): Marker name.
+        bins (list): List of bin values (any length).
+    """
+
+    # Create row: ID + marker + bins
+    new_row = [ID, marker] + bins
+
+    # Ensure the folder exists
+    save_dir = os.path.join(directory, str(repeat), 'intensities')
+    os.makedirs(save_dir, exist_ok=True)
+
+    csv_file = os.path.join(save_dir, f'{num_bins}_meta_individual_{condition}.csv')
+
+    # Check if file exists
+    file_exists = os.path.isfile(csv_file)
+
+    with open(csv_file, 'a', newline='') as f:
+        writer = csv.writer(f)
+
+        # Write header only if file doesn't exist
+        if not file_exists:
+            header = ['ID', 'marker'] + [f'bin_{i+1}' for i in range(len(bins))]
+            writer.writerow(header)
+
+        writer.writerow(new_row)
+
+
+def normalize_markers(directory, repeats, conditions, markers, num_bins):
 
     for repeat in repeats:
         for condition in conditions:
             for marker in markers:
-                outer = 0
-                mid = 0
-                inner = 0
-                individually_normalized_outer = []
-                individually_normalized_mid = []
-                individually_normalized_inner = []
-            
-                for level in levels:
-                    if marker != 'DAPI': 
-                        print("------------------------Now processing:")
-                        print("repeat:", repeat)
-                        print("condition:", repeat)
-                        print("level:", level)
-                        print("marker:", marker)
+                if marker != 'DAPI': 
 
-                        # get paths
-                        marker_path = f"{directory}/{repeat}/intensities/{level}/{marker}_{condition}.npy"
-                        DAPI_path = f"{directory}/{repeat}/intensities/{level}/DAPI_{condition}.npy"
+                    # load bin means 
+                    # load intensities 
+                    print(f"loading intensities for {marker} and DAPI")
 
-                        # load intensities 
-                        print(f"loading intensities for {marker} and DAPI")
-                        intensity_m = np.load(marker_path, allow_pickle=True)
-                        intensity_DAPI = np.load(DAPI_path, allow_pickle=True)
+                    bin_means_path = f"{directory}/{repeat}/intensities/{num_bins}_{marker}_{condition}.npy"
+                    DAPI_bin_means_path = f"{directory}/{repeat}/intensities/{num_bins}_DAPI_{condition}.npy"
 
+                    bin_means = np.load(bin_means_path, allow_pickle=True)
+                    DAPI_bin_means = np.load(DAPI_bin_means_path, allow_pickle=True)
 
-                        for i in range(len(intensity_m)):
-                            m = intensity_m[i]
-                            d = intensity_DAPI[i]
-                            
-                            print(f"{i}-----------------------")
-                            print("marker", m)
-                            print("DAPI norm", d)
+                    normalized_bin_means = [] # average normalized values of all gastruloids in all bins (length is num of bins) [x, x]
+                    avg_normalized_bin_means = [] # normalized values of all gastruloids in all bins (length is num of gastruloids)  [[list length of 7], [list length of 7]] 
+                    meta_ready_means = []
+                    # normalize per bin 
+                    for i, bin_mean in enumerate(bin_means):
+
+                        # length of bin mean is length of selected box ids
+                        DAPI_bin_mean = DAPI_bin_means[i] #  values of DAPI gastruloid i in the all bins
+
+                        normalized_bin_mean = [] # normalized values of gastruloid i in the all bins (length 7)
+
+                        for j in range(len(bin_mean)): # len of bin mean is 7
+
+                            m = bin_mean[j]
+                            d = DAPI_bin_mean[j]
 
                             n = m/d
 
-                            print("normalized", n)
-
-                            if level == "outer":
-                                individually_normalized_outer.append(n)
-                            elif level == "mid":
-                                individually_normalized_mid.append(n)
-                            else:
-                                individually_normalized_inner.append(n)
+                            # add the normalized value of one gastruloid in one bin to the normalized_bin_mean list
+                            normalized_bin_mean.append(n)
                         
+                        # append to big list for individual 
+                        normalized_bin_means.append(normalized_bin_mean) # append the list of 7
+                        # print(f"Got values for gastruloid {i}:, {normalized_bin_mean}")
 
-                        # normalize 
-                        if level == "outer":
-                            normalized_manually = np.nanmean(individually_normalized_outer)
-                            outer = normalized_manually
-                        elif level == "mid":
-                            normalized_manually = np.nanmean(individually_normalized_mid)
-                            mid = normalized_manually
-                        else:
-                            normalized_manually = np.nanmean(individually_normalized_inner)
-                            inner = normalized_manually
+                    
+                    averaged_list = [sum(x)/len(x) for x in zip(*normalized_bin_means)]
+                    # save to main meta 
+                    print(f"saving to meta csv for {marker} for {len(averaged_list)} bins")
+                    print("should be bin len", len(averaged_list))
+                    
+                    meta_intensities_save(directory, repeat, condition, marker, averaged_list, num_bins)
 
-
-                        print(f"normalized manually for {level}:", normalized_manually)
-
-
-                print(f"saving to csv for {marker}")
-                meta_intensities_save(directory, repeat, condition, marker, outer, mid, inner)
-
-                for i in range(1, len(individually_normalized_outer)+1):
-                    meta_intensities_save_individual(directory, i, repeat, condition, marker, individually_normalized_outer[i-1], individually_normalized_mid[i-1], individually_normalized_inner[i-1])
-
+                    # save to individual meta 
+                    for i in range(1, len(normalized_bin_means)+1):
+                        print("should be bin len", len(normalized_bin_means[i-1]))
+                        
+                        meta_intensities_save_individual(directory, i, repeat, condition, marker, normalized_bin_means[i-1], num_bins)
+                        
 
 def bar_plot(csv_path, repeat, plot_type='line', save_dir='plots'):
     df = pd.read_csv(csv_path)
@@ -378,8 +380,8 @@ def bar_plot(csv_path, repeat, plot_type='line', save_dir='plots'):
     # Unique (repeat, condition) pairs
     groups = df.groupby(['repeat', 'condition'])
 
-    # Regions
-    regions = ['inner', 'mid', 'outer']
+    # Dynamically detect regions (columns starting with 'bin_')
+    regions = [col for col in df.columns if col.startswith('bin_')]
     x = np.arange(len(regions))
 
     # Define marker colors
@@ -396,7 +398,7 @@ def bar_plot(csv_path, repeat, plot_type='line', save_dir='plots'):
 
         markers = group['marker'].tolist()
         n_markers = len(markers)
-        bar_width = 0.25  # wider bars
+        bar_width = 0.25  # width of bars
 
         # For line plot smoothing
         x_smooth = np.linspace(x.min(), x.max(), 300)
@@ -422,13 +424,14 @@ def bar_plot(csv_path, repeat, plot_type='line', save_dir='plots'):
         else:
             ax.set_xticks(x)
 
-        ax.set_xticklabels([r.capitalize() for r in regions])
+        # Use the detected regions as x-tick labels
+        ax.set_xticklabels([str(i+1) for i in range(len(regions))])
         ax.set_ylabel('Average Normalized Intensity')
-        ax.set_xlabel('Region')
+        ax.set_xlabel('Bin')
         ax.set_title(f'Marker Intensities - Repeat {repeat}, Condition {condition}')
         ax.legend(title='Marker')
         plt.tight_layout()
-        plt.ylim(0, 1)
+        plt.ylim(0, 1.2)
 
         output_path = os.path.join(save_dir, f'intensities_plot_{condition}.png')
         plt.savefig(output_path)
@@ -454,7 +457,8 @@ def plot_marker_condition_overlap(csv_path, repeat, marker, save_dir='plots'):
         print(f"Not enough data for marker '{marker}' with both conditions.")
         return
 
-    regions = ['inner', 'mid', 'outer']
+    # Dynamically detect regions (columns starting with 'bin_')
+    regions = [col for col in df.columns if col.startswith('bin_')]
     x = np.arange(len(regions))
     x_smooth = np.linspace(x.min(), x.max(), 300)
 
@@ -509,13 +513,14 @@ def plot_marker_condition_overlap(csv_path, repeat, marker, save_dir='plots'):
             bbox=dict(facecolor='white', alpha=0.7, edgecolor='gray'))
 
     ax.set_xticks(x)
-    ax.set_xticklabels([r.capitalize() for r in regions])
+    # Optional: make labels prettier, e.g., 'Bin 1', 'Bin 2', ...
+    ax.set_xticklabels([str(i+1) for i in range(len(regions))])
     ax.set_ylabel('Average Normalized Intensity')
-    ax.set_xlabel('Region')
+    ax.set_xlabel('Bin')
     ax.set_title(f'{marker.upper()} Intensities (WT vs ND6)')
     ax.legend()
     plt.tight_layout()
-    plt.ylim(0, 1)
+    plt.ylim(0, 1.2)
 
     output_path = os.path.join(save_dir, f'overlap_plot_{marker.upper()}.png')
     plt.savefig(output_path)
